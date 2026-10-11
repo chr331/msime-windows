@@ -8,6 +8,7 @@
 #include "defines/defines.h"
 #include "engine/common/helpcode_utils.h"
 #include "engine/contracts/direct_helpcode.h"
+#include "engine/contracts/punctuation_hotkey.h"
 #include "engine/core/data_path.h"
 #include "engine/shuangpin/shuangpin_profile.h"
 
@@ -174,6 +175,21 @@ bool SetConfiguredSwitchLanguageCtrlAltSpaceEnabled(bool enabled)
         return false;
     }
     g_switch_language_ctrl_alt_space_enabled = enabled;
+    return true;
+}
+
+const std::string &GetConfiguredPunctuationHotkey()
+{
+    return g_punctuation_hotkey;
+}
+
+bool SetConfiguredPunctuationHotkey(const std::string &binding)
+{
+    FanyImePunctuationHotkey::Binding parsed;
+    if (!FanyImePunctuationHotkey::Parse(binding, parsed) ||
+        !WriteConfiguredValue("keybindings", "toggle_punctuation", EscapeTomlBasicString(binding)))
+        return false;
+    g_punctuation_hotkey = binding;
     return true;
 }
 

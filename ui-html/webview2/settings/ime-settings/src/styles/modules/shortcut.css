@@ -54,6 +54,33 @@
   border-top: 1px solid var(--border-color);
 }
 
+.punctuation-hotkey-editor {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.punctuation-hotkey-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.punctuation-hotkey-actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-color);
+  background: var(--control-bg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.punctuation-hotkey-actions button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 .shortcut-row-danger > span {
   color: var(--danger-text);
 }

@@ -310,7 +310,11 @@ bool CMetasequoiaIME::_MatchChordInputHotkey(WPARAM wParam, _Out_ GUID *hotkeyGu
         *hotkeyGuid = Global::MetasequoiaIMEGuidDoubleSingleBytePreserveKey;
         return true;
     }
-    if (code == VK_OEM_PERIOD && ctrl && !shift && !alt)
+    const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 || (GetKeyState(VK_RWIN) & 0x8000) != 0;
+    const unsigned modifiers = (shift ? FanyImePunctuationHotkey::Shift : 0) |
+                               (ctrl ? FanyImePunctuationHotkey::Control : 0) |
+                               (alt ? FanyImePunctuationHotkey::Alt : 0) | (win ? FanyImePunctuationHotkey::Win : 0);
+    if (hotkeys.punctuation.Matches(code, modifiers))
     {
         *hotkeyGuid = Global::MetasequoiaIMEGuidPunctuationPreserveKey;
         return true;

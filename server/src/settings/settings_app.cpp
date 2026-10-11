@@ -577,6 +577,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"switch_language_ctrl", GetConfiguredSwitchLanguageCtrlEnabled()},
             {"switch_language_ctrl_alt_space", GetConfiguredSwitchLanguageCtrlAltSpaceEnabled()},
             {"toggle_character_set_ctrl_shift_f", GetConfiguredCharacterSetShortcutEnabled()},
+            {"toggle_punctuation", GetConfiguredPunctuationHotkey()},
             {"trilingual_cycle", GetConfiguredTrilingualCycleEnabled()}}},
           {"frequency_adjustment",
            {{"mode", frequency.mode},
@@ -735,18 +736,18 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
     return string_to_wstring(serialized);
 }
 
-SerialTaskQueue::Completion ConfigCompletion(bool refresh_skin_catalog = false)
+SerialTaskQueue::Completion ConfigCompletion(bool refresh_skin_catalog = false, bool force_snapshot = false)
 {
     TraceStartup(refresh_skin_catalog ? "worker: BuildConfigMessage(skins) begin" : "worker: BuildConfigMessage begin");
     auto message = BuildConfigMessage(refresh_skin_catalog);
     TraceStartup("worker: BuildConfigMessage end");
     const bool light = ResolveConfiguredTheme(GetConfiguredThemeSettings()) == "light";
-    return [message = std::move(message), light, linger = GetConfiguredSettingsWindowLinger()] {
+    return [message = std::move(message), light, linger = GetConfiguredSettingsWindowLinger(), force_snapshot] {
         g_settings_light = light;
         g_settings_window_linger = linger;
         ApplySettingsChromeTheme();
         SettingsSplash::SetTheme(light);
-        if (g_webview && message != g_last_config_message)
+        if (g_webview && (force_snapshot || message != g_last_config_message))
         {
             if (SUCCEEDED(g_webview->PostWebMessageAsJson(message.c_str())))
             {
@@ -1024,6 +1025,9 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCharacterSetShortcutEnabled(json::value_to<bool>(data.at("value")));
     if (path == "keybindings.trilingual_cycle")
         return SetConfiguredTrilingualCycleEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "keybindings.toggle_punctuation")
+        return data.at("value").is_string() &&
+               SetConfiguredPunctuationHotkey(json::value_to<std::string>(data.at("value")));
     if (path.rfind("frequency_adjustment.", 0) == 0)
     {
         const std::string key = path.substr(21);
@@ -1497,7 +1501,9 @@ void HandleWebMessage(HWND hwnd, ICoreWebView2WebMessageReceivedEventArgs *args)
             const auto data = value.at("data").as_object();
             g_worker->Submit([data] {
                 const bool saved = ApplyConfigUpdate(data);
-                auto completion = ConfigCompletion();
+                // This editor waits for persisted state even for a failed/no-op write.
+                const bool force_snapshot = data.at("path").as_string() == "keybindings.toggle_punctuation";
+                auto completion = ConfigCompletion(false, force_snapshot);
                 return [saved, completion = std::move(completion)] {
                     completion();
                     if (!saved)

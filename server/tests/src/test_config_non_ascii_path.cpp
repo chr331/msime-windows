@@ -103,6 +103,28 @@ TEST_CASE(config_round_trips_under_non_ascii_profile_path)
         InitImeConfig();
         REQUIRE(fs::exists(data_dir / L"config.toml"));
 
+        REQUIRE_EQ(GetConfiguredPunctuationHotkey(), std::string("Ctrl+Period"));
+        for (const std::string binding : {"Ctrl+Shift+Period", "Alt+Comma", ""})
+        {
+            REQUIRE(SetConfiguredPunctuationHotkey(binding));
+            InitImeConfig();
+            REQUIRE_EQ(GetConfiguredPunctuationHotkey(), binding);
+        }
+        const auto before_invalid_hotkey = ReadText(data_dir / L"config.toml");
+        REQUIRE(!SetConfiguredPunctuationHotkey("Ctrl+Shift+KeyF"));
+        REQUIRE(!SetConfiguredPunctuationHotkey("Ctrl+Alt+Period"));
+        REQUIRE_EQ(ReadText(data_dir / L"config.toml"), before_invalid_hotkey);
+        REQUIRE_EQ(GetConfiguredPunctuationHotkey(), std::string());
+        auto manual_config = before_invalid_hotkey;
+        const std::string empty_binding = "toggle_punctuation = \"\"";
+        const auto binding_position = manual_config.find(empty_binding);
+        REQUIRE(binding_position != std::string::npos);
+        manual_config.replace(binding_position, empty_binding.size(), "toggle_punctuation = true");
+        WriteText(data_dir / L"config.toml", manual_config);
+        InitImeConfig();
+        REQUIRE_EQ(GetConfiguredPunctuationHotkey(), std::string());
+        REQUIRE(SetConfiguredPunctuationHotkey("Ctrl+Period"));
+
         REQUIRE(SetConfiguredInputMode("japanese"));
         REQUIRE(SetConfiguredInputScheme("wubi"));
         for (const std::string &position : {"top-left", "top", "top-right", "bottom-left", "bottom", "bottom-right"})

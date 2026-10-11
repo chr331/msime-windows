@@ -387,6 +387,10 @@ SwitchLanguageHotkeys ParseSwitchLanguageHotkeys(const std::filesystem::path &co
         {
             result.character_set_ctrl_shift_f = ParseTomlBool(raw, true);
         }
+        else if (key == "toggle_punctuation")
+        {
+            result.punctuation = FanyImePunctuationHotkey::FromTomlValue(raw);
+        }
         else if (key == "switch_language" && !sawShift && !sawCtrlAltSpace)
         {
             // Legacy array: switch_language = ["Ctrl+Space", "Shift"]

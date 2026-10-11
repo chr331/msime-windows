@@ -40,6 +40,10 @@ target_include_directories(test_punctuation_commit_text PRIVATE ../src)
 target_compile_features(test_punctuation_commit_text PRIVATE cxx_std_17)
 add_test(NAME punctuation_commit_text COMMAND test_punctuation_commit_text)
 
+add_executable(test_punctuation_hotkey punctuation_hotkey.cpp)
+target_compile_features(test_punctuation_hotkey PRIVATE cxx_std_17)
+add_test(NAME punctuation_hotkey COMMAND test_punctuation_hotkey)
+
 # The classifier and the event queue are compiled into this target directly:
 # they must stay free of TSF and DLL lifecycle dependencies.
 add_executable(test_statistics statistics.cpp ../src/Statistics/char_classify.cpp)
