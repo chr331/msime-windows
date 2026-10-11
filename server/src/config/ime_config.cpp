@@ -21,6 +21,7 @@
 #include "clipboard/clipboard_history.h"
 #include "engine/common/helpcode_utils.h"
 #include "engine/core/data_path.h"
+#include "engine/contracts/punctuation_hotkey.h"
 #include "statistics/stats_store.h"
 #include "voice-input/voice_providers.h"
 
@@ -55,6 +56,7 @@ bool g_switch_language_shift_enabled = true;
 bool g_switch_language_ctrl_enabled = false;
 bool g_switch_language_ctrl_alt_space_enabled = true;
 bool g_character_set_shortcut_enabled = true;
+std::string g_punctuation_hotkey{FanyImePunctuationHotkey::Default};
 int g_candidate_page_size = 8;
 std::string g_candidate_font = "Noto Sans SC";
 std::string g_candidate_english_font = "Segoe UI";
@@ -686,6 +688,12 @@ bool LoadImeConfig()
             g_switch_language_ctrl_alt_space_enabled =
                 tbl["keybindings"]["switch_language_ctrl_alt_space"].value_or(legacy_ctrl_alt_space);
             g_character_set_shortcut_enabled = tbl["keybindings"]["toggle_character_set_ctrl_shift_f"].value_or(true);
+            const auto binding = tbl["keybindings"]["toggle_punctuation"];
+            g_punctuation_hotkey =
+                binding ? binding.value_or(std::string()) : std::string(FanyImePunctuationHotkey::Default);
+            FanyImePunctuationHotkey::Binding parsed;
+            if (!FanyImePunctuationHotkey::Parse(g_punctuation_hotkey, parsed))
+                g_punctuation_hotkey.clear();
         }
         {
             const std::string mode = tbl["frequency_adjustment"]["mode"].value_or(std::string("promote"));

@@ -42,7 +42,17 @@
     <div class="shortcut-list">
       <div class="shortcut-row"><span>切换英文候选模式（保持中文状态，以英文单词作为候选）</span><div class="shortcut-keys"><kbd>Ctrl</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>E</kbd></div></div>
       <div class="shortcut-row"><span>全角 / 半角切换</span><div class="shortcut-keys"><kbd>Ctrl</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>Space</kbd></div></div>
-      <div class="shortcut-row"><span>中文 / 英文标点切换（开启标点锁定时不生效）</span><div class="shortcut-keys"><kbd>Ctrl</kbd><i>+</i><kbd>.</kbd></div></div>
+      <div class="shortcut-row">
+        <span>中文 / 英文标点切换（开启标点锁定时不生效）</span>
+        <div class="punctuation-hotkey-editor">
+          <div class="punctuation-hotkey-actions">
+            <button type="button" id="punctuationHotkeyButton" aria-label="修改标点切换快捷键" aria-pressed="false" aria-describedby="punctuationHotkeyStatus">Ctrl + .</button>
+            <button type="button" id="punctuationHotkeyClear">清空</button>
+            <button type="button" id="punctuationHotkeyReset">恢复默认</button>
+          </div>
+          <span id="punctuationHotkeyStatus" role="status" aria-live="polite"></span>
+        </div>
+      </div>
     </div>
   </div>
 

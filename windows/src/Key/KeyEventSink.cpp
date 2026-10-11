@@ -869,6 +869,18 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
         return S_OK;
     }
 
+    GUID hotkeyGuid = {};
+    if (_MatchChordInputHotkey(wParam, &hotkeyGuid))
+    {
+        // Punctuation can join the preserved-action FIFO while text is pending.
+        const bool punctuation = IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidPunctuationPreserveKey);
+        if (!_HasDeferredKeyBarrier() || punctuation)
+        {
+            *pIsEaten = !punctuation || _DeferredKeyQueueHasCapacity() ? TRUE : FALSE;
+            return S_OK;
+        }
+    }
+
     if (_HasDeferredKeyBarrier())
     {
         _KEYSTROKE_STATE deferredState = {};
@@ -923,13 +935,6 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
             // the char proves nothing about the keyboard state.
             _NotePassthroughStatistics(static_cast<UINT>(wParam), deferredWch, false);
         }
-        return S_OK;
-    }
-
-    GUID hotkeyGuid = {};
-    if (_MatchChordInputHotkey(wParam, &hotkeyGuid))
-    {
-        *pIsEaten = TRUE;
         return S_OK;
     }
 
@@ -1082,10 +1087,11 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         }
     }
 
-    if (canDefer && translatedWch == nullptr && prevalidatedKeyState == nullptr && !_HasDeferredKeyBarrier())
+    if (canDefer && translatedWch == nullptr && prevalidatedKeyState == nullptr)
     {
         GUID hotkeyGuid = {};
-        if (_MatchChordInputHotkey(wParam, &hotkeyGuid))
+        if (_MatchChordInputHotkey(wParam, &hotkeyGuid) &&
+            (!_HasDeferredKeyBarrier() || IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidPunctuationPreserveKey)))
         {
             _shiftHotkeyArmed = false;
             _ctrlHotkeyArmed = false;
