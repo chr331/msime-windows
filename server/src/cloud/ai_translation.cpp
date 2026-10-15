@@ -1,6 +1,7 @@
 #include "ai_translation.h"
 
 #include "ai/chat_completions.h"
+#include "ai/chat_request_params.h"
 #include "translation_gloss.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -171,6 +172,37 @@ bool IsUsableConfig(const Config &config)
            (config.endpoint.rfind("https://", 0) == 0 || config.endpoint.rfind("http://", 0) == 0);
 }
 
+namespace detail
+{
+nlohmann::json BuildRequestBody(const Config &config, const std::vector<std::string> &texts, const std::string &source,
+                                const std::string &target)
+{
+    nlohmann::json body = {{"model", config.model},
+                           {"stream", false},
+                           {"response_format", {{"type", "json_object"}}},
+                           {"messages",
+                            {{{"role", "system"}, {"content", BuildSystemPrompt(source, target)}},
+                             {{"role", "user"}, {"content", nlohmann::json(texts).dump()}}}}};
+    if (ChatCompletions::IsOpenAiReasoningRequest(config.provider, config.model))
+        body["reasoning_effort"] = ChatCompletions::kOpenAiReasoningEffort;
+    else
+        body["temperature"] = 0.0;
+    if (config.provider == "deepseek")
+    {
+        // 与 AI 辅助保持一致，避免推理模型的思考内容拖慢候选翻译。
+        body["thinking"] = {{"type", "disabled"}};
+    }
+    return body;
+}
+
+long RequestTimeoutMs(const Config &config)
+{
+    return ChatCompletions::IsOpenAiReasoningRequest(config.provider, config.model)
+               ? ChatCompletions::kReasoningTimeoutMs
+               : ChatCompletions::kDefaultTimeoutMs;
+}
+} // namespace detail
+
 std::vector<std::string> TextTranslateBatch(const Config &config, const std::vector<std::string> &texts,
                                             const std::string &source, const std::string &target)
 {
@@ -178,20 +210,9 @@ std::vector<std::string> TextTranslateBatch(const Config &config, const std::vec
     if (texts.empty() || !IsUsableConfig(config) || source.empty() || target.empty())
         return results;
 
-    nlohmann::json body = {{"model", config.model},
-                           {"stream", false},
-                           {"temperature", 0.0},
-                           {"response_format", {{"type", "json_object"}}},
-                           {"messages",
-                            {{{"role", "system"}, {"content", BuildSystemPrompt(source, target)}},
-                             {{"role", "user"}, {"content", nlohmann::json(texts).dump()}}}}};
-    if (config.provider == "deepseek")
-    {
-        // 与 AI 辅助保持一致，避免推理模型的思考内容拖慢候选翻译。
-        body["thinking"] = {{"type", "disabled"}};
-    }
+    const auto body = detail::BuildRequestBody(config, texts, source, target);
     const auto content =
-        ChatCompletions::FetchContent(config.endpoint, config.token, body.dump(), ChatCompletions::kDefaultTimeoutMs);
+        ChatCompletions::FetchContent(config.endpoint, config.token, body.dump(), detail::RequestTimeoutMs(config));
     return content ? ParseTranslations(*content, texts.size()) : results;
 }
 } // namespace AiTranslation

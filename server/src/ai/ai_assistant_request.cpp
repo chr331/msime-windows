@@ -1,5 +1,6 @@
 #include "ai_assistant_request.h"
 #include "chat_completions.h"
+#include "chat_request_params.h"
 
 #include "voice-input/voice_providers.h"
 
@@ -8,6 +9,7 @@ namespace AiAssistant::detail
 nlohmann::json BuildRequestBody(const Request &request)
 {
     const auto &config = request.config;
+    const bool openai_reasoning = ChatCompletions::IsOpenAiReasoningRequest(config.provider, config.model);
     const bool thinking = VoiceInput::UsesDeepSeekThinking(config.provider, config.thinking);
     nlohmann::json input = {{"segmented_pinyin", request.pinyin_segments},
                             {"context", request.context},
@@ -15,16 +17,21 @@ nlohmann::json BuildRequestBody(const Request &request)
     nlohmann::json body = {
         {"model", config.model},
         {"stream", false},
-        {"temperature", 0.2},
-        // Reasoning tokens may count against max_tokens; 512 would cut the JSON answer off.
-        {"max_tokens", thinking ? 8192 : 512},
         {"response_format", {{"type", "json_object"}}},
         {"messages",
          {{{"role", "system"}, {"content", config.prompt}}, {{"role", "user"}, {"content", input.dump()}}}}};
+    if (!openai_reasoning)
+        body["temperature"] = 0.2;
+    // Reasoning tokens count against the output limit and can leave no room for JSON.
+    ChatCompletions::SetTokenLimit(body, config.provider, thinking || openai_reasoning ? 8192 : 512);
     if (thinking)
     {
         body["thinking"] = {{"type", "enabled"}};
         body["reasoning_effort"] = config.thinking;
+    }
+    else if (openai_reasoning)
+    {
+        body["reasoning_effort"] = ChatCompletions::kOpenAiReasoningEffort;
     }
     else if (config.provider == "deepseek")
     {
@@ -37,7 +44,9 @@ nlohmann::json BuildRequestBody(const Request &request)
 
 long RequestTimeoutMs(const AiAssistantConfig &config)
 {
-    return VoiceInput::UsesDeepSeekThinking(config.provider, config.thinking) ? 30000L
-                                                                              : ChatCompletions::kDefaultTimeoutMs;
+    return VoiceInput::UsesDeepSeekThinking(config.provider, config.thinking) ||
+                   ChatCompletions::IsOpenAiReasoningRequest(config.provider, config.model)
+               ? ChatCompletions::kReasoningTimeoutMs
+               : ChatCompletions::kDefaultTimeoutMs;
 }
 } // namespace AiAssistant::detail

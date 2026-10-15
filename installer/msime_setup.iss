@@ -658,7 +658,6 @@ begin
   DataDirPage.Buttons[0].OnClick := @DataDirBrowseClick;
 
 #ifndef LightPackage
-  UserConfigExistedBeforeInstall := FileExists(UserConfigPath);
   NetworkPage := CreateInputOptionPage(
     DataDirPage.ID,
     '联网功能',
@@ -676,42 +675,13 @@ begin
 #endif
 end;
 
+#include "cloud_choice.iss"
+
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
   if (NetworkPage <> nil) and (PageID = NetworkPage.ID) then
-    Result := UserConfigExistedBeforeInstall;
-end;
-
-{ 只在本次安装刚生成 config.toml 时写入，且只改 [general] 段里的这一个键。找不到就什么都不做——
-  这一步失败不应该让安装失败。}
-procedure ApplyNetworkChoiceToUserConfig;
-var
-  Lines: TArrayOfString;
-  Index: Integer;
-  Trimmed: String;
-  InGeneral: Boolean;
-begin
-  if UserConfigExistedBeforeInstall or (NetworkPage = nil) then
-    Exit;
-  if NetworkPage.Values[CloudCandidatesIndex] then
-    Exit;
-  if not LoadStringsFromFile(UserConfigPath, Lines) then
-    Exit;
-
-  InGeneral := False;
-  for Index := 0 to GetArrayLength(Lines) - 1 do
-  begin
-    Trimmed := Trim(Lines[Index]);
-    if (Length(Trimmed) > 0) and (Trimmed[1] = '[') then
-      InGeneral := (Trimmed = '[general]')
-    else if InGeneral and (Pos('cloud_candidates', Trimmed) = 1) then
-    begin
-      Lines[Index] := 'cloud_candidates = false';
-      SaveStringsToFile(UserConfigPath, Lines, False);
-      Exit;
-    end;
-  end;
+    Result := UserConfigExistsBeforeInstall;
 end;
 
 procedure LaunchInstalledComponents;
@@ -768,6 +738,14 @@ begin
       exit;
     end;
     Reason := DataDirRejectionReason(Adopted);
+    if Reason <> '' then
+    begin
+      MsgBox(Reason, mbError, MB_OK);
+      Result := False;
+      exit;
+    end;
+    { 冲突要在这一页拦下，等到「安装」才报错时用户已经回不到这里了。}
+    Reason := ConfigMigrationProblem(ResolvePreviousDataDir, Adopted);
     if Reason <> '' then
     begin
       MsgBox(Reason, mbError, MB_OK);
@@ -913,6 +891,7 @@ begin
     (CompareText(FileName, 'chinese-ime-lm-NOTICE.md') = 0) or
     (CompareText(FileName, 'config.default.toml') = 0) or
     (CompareText(FileName, 'helpcodes') = 0) or
+    (CompareText(FileName, 'radical') = 0) or
     (CompareText(FileName, 'html') = 0);
 end;
 
@@ -1426,8 +1405,13 @@ begin
   if (OldDir = '') or (CompareText(OldDir, NewDir) = 0) or (not DirExists(OldDir)) then
     exit;
 
+  Result := ConfigMigrationProblem(OldDir, NewDir);
+  if Result <> '' then
+    exit;
+
   Log('Migrating user data from ' + OldDir + ' to ' + NewDir);
   ForceDirectories(NewDir);
+  DropMigratedConfigCopy(OldDir, NewDir);
 
   Moved := Exec(
     ExpandConstant('{sys}\robocopy.exe'),
@@ -1499,12 +1483,14 @@ begin
     { 用户词库没搬成必须让安装失败。否则新版本会对着一个空的 msime_user.db 启动，
       ssPostInstall 的回放只会记一句 skipped，用户的自造词和词频就这么静悄悄没了——
       这正是 ReplayUserDictionary 失败时也要中止安装的那条理由。
-      其他文件（config.toml、皮肤）搬不动只记日志：它们丢了可以重建。}
+      config.toml 同理，见 ConfigMigrationFailure。皮肤等搬不动只记日志：它们丢了可以重建。}
     if FileExists(AddBackslash(OldDir) + 'msime_user.db') then
       Result :=
         '无法把用户词库从 ' + OldDir + ' 移动到 ' + NewDir + '。' + #13#10 +
         '请确认输入法相关进程已全部退出、目标磁盘可写且空间足够，然后重试安装。' + #13#10 +
-        '你的用户词库仍留在 ' + OldDir + '，本次安装没有改动它。';
+        '你的用户词库仍留在 ' + OldDir + '，本次安装没有改动它。'
+    else
+      Result := ConfigMigrationFailure(OldDir, NewDir);
     exit;
   end;
 
@@ -1637,9 +1623,20 @@ begin
     Result := '数据目录 ' + GetDataDir('') + ' 不可用：' + DataDirProblem;
     exit;
   end;
+#ifndef LightPackage
+  { 静默安装也必须在最终目录确定后、配置迁移前检查。}
+  UserConfigExistedBeforeInstall := UserConfigExistsBeforeInstall;
+#endif
   { 迁移会往目录里搬文件，所以要在那之前记下它是不是空着被接手的。}
   DataDirAdoptedEmpty :=
     OwnsDataDirExclusively(GetDataDir('')) or DirectoryIsEmpty(GetDataDir(''));
+
+  DataDirProblem := ConfigMigrationProblem(ResolvePreviousDataDir, GetDataDir(''));
+  if DataDirProblem <> '' then
+  begin
+    Result := DataDirProblem;
+    exit;
+  end;
 
   { 先锁定本次目录名，再清理能够释放的旧版本 DLL。}
   VersionDirName := GetVersionDir('');
@@ -1703,7 +1700,6 @@ begin
     WriteDataDirMarker(GetDataDir(''), DataDirAdoptedEmpty);
 #ifndef LightPackage
     ReplayUserDictionary;
-    ApplyNetworkChoiceToUserConfig;
 #endif
     CreateWatchdogLogonTask;
     EnsureImeUserDataDir;
@@ -1715,6 +1711,10 @@ begin
       'Software\Microsoft\Windows\CurrentVersion\Run',
       'MetasequoiaImeWatchdog'
     );
+#ifndef LightPackage
+    { 偏好写入放在最后：它失败只弹提示，不能挡住上面这些必需步骤。}
+    ApplyNetworkChoiceToUserConfig;
+#endif
   end;
 end;
 

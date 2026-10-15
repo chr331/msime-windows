@@ -155,6 +155,7 @@ set(SRC_FILES
     "./src/ai/ai_assistant_request.h"
     "./src/ai/chat_completions.cpp"
     "./src/ai/chat_completions.h"
+    "./src/ai/chat_request_params.h"
     "./src/clipboard/clipboard_history.cpp"
     "./src/clipboard/clipboard_history.h"
     "./src/cloud/ai_translation.cpp"
@@ -224,6 +225,7 @@ set(SRC_FILES
     "./src/settings/settings_launcher.h"
     "./src/settings/api_credential_test.cpp"
     "./src/settings/api_credential_test.h"
+    "./src/settings/api_credential_test_request.h"
     "./src/settings/collocation_model.cpp"
     "./src/settings/collocation_model.h"
     "./src/skin/candidate_skin_catalog.cpp"
@@ -235,6 +237,8 @@ set(SRC_FILES
     "./src/session/session_factory.h"
     "./src/statistics/stats_aggregate.cpp"
     "./src/statistics/stats_aggregate.h"
+    "./src/statistics/stats_candidate_capture.cpp"
+    "./src/statistics/stats_candidate_capture.h"
     "./src/statistics/stats_frames.cpp"
     "./src/statistics/stats_frames.h"
     "./src/statistics/stats_pipe.cpp"
@@ -246,6 +250,8 @@ set(SRC_FILES
     "./src/utils/candidate_size_estimator.h"
     "./src/utils/common_utils.cpp"
     "./src/utils/common_utils.h"
+    "./src/utils/hanzi_pinyin.cpp"
+    "./src/utils/hanzi_pinyin.h"
     "./src/utils/ime_paths.cpp"
     "./src/utils/ime_utils.cpp"
     "./src/utils/ime_utils.h"
@@ -323,6 +329,8 @@ target_include_directories(${PROJECT_NAME}
 
 target_link_libraries(${PROJECT_NAME} PRIVATE MetasequoiaIme::Engine MetasequoiaIme::Voice MetasequoiaIme::VoiceCapture)
 target_link_libraries(${PROJECT_NAME} PRIVATE unofficial::sqlite3::sqlite3 fmt::fmt spdlog::spdlog Boost::locale Boost::json nlohmann_json::nlohmann_json)
+# U 模式候选的注音（utils/hanzi_pinyin）与设置页的导入注音共用 cpp-pinyin。
+target_link_libraries(${PROJECT_NAME} PRIVATE cpp-pinyin::cpp-pinyin)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenCC::OpenCC)
 add_dependencies(${PROJECT_NAME} Dictionaries)
 target_link_libraries(${PROJECT_NAME} PRIVATE winhttp)
@@ -448,8 +456,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 set(SETTINGS_EXECUTABLE_NAME "MetasequoiaImeSettings")
 add_executable(${SETTINGS_EXECUTABLE_NAME} WIN32
     "./src/settings/settings_app.cpp"
+    "./src/ai/chat_request_params.h"
     "./src/settings/api_credential_test.cpp"
     "./src/settings/api_credential_test.h"
+    "./src/settings/api_credential_test_request.h"
     "./src/settings/collocation_model.cpp"
     "./src/settings/collocation_model.h"
     "./src/settings/neural_model.cpp"
@@ -510,6 +520,8 @@ add_executable(${SETTINGS_EXECUTABLE_NAME} WIN32
     "./src/clipboard/clipboard_history.h"
     "./src/utils/common_utils.cpp"
     "./src/utils/common_utils.h"
+    "./src/utils/hanzi_pinyin.cpp"
+    "./src/utils/hanzi_pinyin.h"
     "./src/utils/ime_paths.cpp"
     "./src/utils/network_proxy.cpp"
     "./src/utils/network_proxy.h"

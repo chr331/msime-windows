@@ -627,7 +627,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"trigger_count", frequency.trigger_count},
             {"linear_step", frequency.linear_step}}},
           {"utility",
-           {{"unicode_mode", GetConfiguredUnicodeModeEnabled()},
+           {{"radical_mode", GetConfiguredRadicalModeEnabled()},
             {"quick_phrase", GetConfiguredQuickPhraseEnabled()},
             {"quick_phrase_candidates", GetConfiguredQuickPhraseCandidatesEnabled()},
             {"quick_phrase_frequency", GetConfiguredQuickPhraseFrequencyEnabled()},
@@ -1028,8 +1028,8 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredAssocSentenceCollocationEnabled(json::value_to<bool>(data.at("value")));
     if (path == "association.sentence_collocation_model")
         return SetConfiguredAssocSentenceCollocationModel(json::value_to<std::string>(data.at("value")));
-    if (path == "utility.unicode_mode")
-        return SetConfiguredUnicodeModeEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "utility.radical_mode")
+        return SetConfiguredRadicalModeEnabled(json::value_to<bool>(data.at("value")));
     if (path == "utility.quick_phrase")
         return SetConfiguredQuickPhraseEnabled(json::value_to<bool>(data.at("value")));
     if (path == "utility.quick_phrase_candidates")
@@ -1293,6 +1293,8 @@ json::object OverviewToJson(const MsimeStats::Overview &overview)
         entry["punct"] = row.punct;
         entry["other"] = row.other;
         entry["activeMs"] = row.active_ms;
+        entry["firstWordHits"] = row.first_word_hits;
+        entry["firstWordTotal"] = row.first_word_total;
         daily.push_back(std::move(entry));
     }
 
@@ -1315,6 +1317,25 @@ json::object OverviewToJson(const MsimeStats::Overview &overview)
     result["averageSpeed"] = overview.average_speed;
     result["fastestSpeed"] = overview.fastest_speed;
     result["fastestDayKey"] = overview.fastest_day_key;
+    // optional 留空时写 JSON null：设置页按「无测量」渲染，绝不读成 0%。boost::json
+    // 不认识 std::optional，须显式落成数值或 null。
+    if (overview.today_first_word_ratio)
+    {
+        result["todayFirstWordRatio"] = *overview.today_first_word_ratio;
+    }
+    else
+    {
+        result["todayFirstWordRatio"] = json::value(nullptr);
+    }
+    if (overview.total_first_word_ratio)
+    {
+        result["totalFirstWordRatio"] = *overview.total_first_word_ratio;
+    }
+    else
+    {
+        result["totalFirstWordRatio"] = json::value(nullptr);
+    }
+    result["todayFirstWordTotal"] = overview.today_first_word_total;
     result["categories"] = std::move(categories);
     result["todayHourly"] = std::move(hourly);
     result["daily"] = std::move(daily);
