@@ -7,11 +7,15 @@ const PUNCTUATION_KEYS: Record<string, string> = {
 };
 let punctuationHotkey = DEFAULT_PUNCTUATION_HOTKEY;
 
+function formatPunctuationHotkey(binding: string): string {
+  return binding ? binding.split('+').map(key => PUNCTUATION_KEYS[key] ??
+    (key === 'Alt' ? '左 Alt' : key.replace(/^(Key|Digit)/, ''))).join(' + ') : '未绑定';
+}
+
 function displayPunctuationHotkey(): void {
   const button = document.getElementById('punctuationHotkeyButton');
   if (button && button.getAttribute('aria-pressed') !== 'true') {
-    button.textContent = punctuationHotkey ? punctuationHotkey.split('+').map(key =>
-      PUNCTUATION_KEYS[key] ?? (key === 'Alt' ? '左 Alt' : key.replace(/^(Key|Digit)/, ''))).join(' + ') : '未绑定';
+    button.textContent = formatPunctuationHotkey(punctuationHotkey);
   }
 }
 
@@ -48,14 +52,29 @@ const PUNCTUATION_HOTKEY_CONFLICTS: Record<string, string> = {
   'Alt+Shift+F4': '左 Alt + Shift + F4 用于关闭窗口。',
 };
 
+const COMMON_APPLICATION_SHORTCUTS: Record<string, string> = {
+  'Ctrl+KeyA': '全选', 'Ctrl+KeyC': '复制', 'Ctrl+KeyV': '粘贴', 'Ctrl+KeyX': '剪切',
+  'Ctrl+KeyZ': '撤销', 'Ctrl+KeyY': '重做', 'Ctrl+KeyS': '保存', 'Ctrl+KeyF': '查找',
+  'Ctrl+KeyH': '替换', 'Ctrl+KeyP': '打印', 'Ctrl+KeyO': '打开', 'Ctrl+KeyN': '新建',
+  'Ctrl+KeyW': '关闭标签页或文档', 'Ctrl+F4': '关闭文档', 'Ctrl+KeyT': '新建标签页',
+  'Ctrl+KeyL': '定位地址栏', 'Ctrl+KeyR': '刷新', 'Ctrl+KeyB': '加粗',
+  'Ctrl+KeyI': '斜体', 'Ctrl+KeyU': '下划线',
+  'Ctrl+Shift+KeyV': '粘贴为纯文本', 'Ctrl+Shift+KeyZ': '重做',
+  'Ctrl+Shift+KeyS': '另存为', 'Ctrl+Shift+KeyT': '重新打开关闭的标签页',
+};
+
 function setupPunctuationHotkey(): void {
   const button = document.getElementById('punctuationHotkeyButton') as HTMLButtonElement | null;
   const status = document.getElementById('punctuationHotkeyStatus');
+  const confirmation = document.getElementById('punctuationHotkeyConfirmation');
   if (!button) return;
   let leftAlt = false;
   let rightAlt = false;
+  let pendingBinding: string | null = null;
   const finish = (message = '') => {
     leftAlt = rightAlt = false;
+    pendingBinding = null;
+    if (confirmation) confirmation.hidden = true;
     button.setAttribute('aria-pressed', 'false');
     displayPunctuationHotkey();
     if (status) status.textContent = message;
@@ -68,13 +87,21 @@ function setupPunctuationHotkey(): void {
   };
   button.addEventListener('click', () => {
     if (button.getAttribute('aria-pressed') === 'true') return finish();
+    finish();
     button.setAttribute('aria-pressed', 'true');
     button.textContent = '请按下快捷键';
     if (status) status.textContent = 'Ctrl 或左 Alt + 字母、数字、F1–F12、标点，可加 Shift；Esc 取消，Tab 离开。';
   });
-  button.addEventListener('blur', () => finish());
+  button.addEventListener('blur', () => {
+    if (button.getAttribute('aria-pressed') === 'true') finish();
+  });
   button.addEventListener('keydown', event => {
     const code = punctuationEventCode(event);
+    if (pendingBinding !== null && code === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      return finish();
+    }
     if (button.getAttribute('aria-pressed') !== 'true' || code === 'Tab') return;
     event.preventDefault();
     event.stopPropagation();
@@ -96,7 +123,22 @@ function setupPunctuationHotkey(): void {
       if (status) status.textContent = PUNCTUATION_HOTKEY_CONFLICTS[binding];
       return;
     }
-    save(binding);
+    const action = COMMON_APPLICATION_SHORTCUTS[binding];
+    finish(`${formatPunctuationHotkey(binding)}${action ? ` 与常用的“${action}”快捷键冲突。` : ' 将用于标点切换。'}绑定后，中英文状态下均会覆盖软件里的同名快捷键。`);
+    pendingBinding = binding;
+    if (confirmation) confirmation.hidden = false;
+  });
+  document.getElementById('punctuationHotkeyConfirm')?.addEventListener('click', () => {
+    if (pendingBinding !== null) save(pendingBinding);
+  });
+  document.getElementById('punctuationHotkeyCancel')?.addEventListener('click', () => finish());
+  confirmation?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      finish();
+      button.focus();
+    }
   });
   button.addEventListener('keyup', event => {
     if (!event.altKey) leftAlt = rightAlt = false;

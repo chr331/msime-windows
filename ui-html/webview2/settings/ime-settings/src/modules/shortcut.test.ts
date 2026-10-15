@@ -7,6 +7,8 @@ vi.mock('./config-sync', () => ({ updateConfig: vi.fn() }));
 class Checkbox extends EventTarget {
   checked = true;
   textContent = '';
+  hidden = true;
+  focus = vi.fn();
   private attributes = new Map<string, string>();
   getAttribute(name: string): string | null { return this.attributes.get(name) ?? null; }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
@@ -21,7 +23,8 @@ beforeEach(() => {
   trilingualCycle = new Checkbox();
   trilingualCycle.checked = false;
   editor = Object.fromEntries(['punctuationHotkeyButton', 'punctuationHotkeyClear', 'punctuationHotkeyReset',
-    'punctuationHotkeyStatus'].map(id => [id, new Checkbox()]));
+    'punctuationHotkeyStatus', 'punctuationHotkeyConfirmation', 'punctuationHotkeyConfirm',
+    'punctuationHotkeyCancel'].map(id => [id, new Checkbox()]));
   vi.stubGlobal('document', {
     getElementById: (id: string) => {
       if (id === 'characterSetShortcutCheckbox') return characterSet;
@@ -84,6 +87,10 @@ function key(code: string, options: Record<string, unknown> = {}): Event {
   return event;
 }
 
+function confirmBinding(): void {
+  editor.punctuationHotkeyConfirm.dispatchEvent(new Event('click'));
+}
+
 it('applies default, custom and explicitly disabled bindings without writing back', () => {
   expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
   applyShortcutConfig({ toggle_punctuation: 'Alt+KeyA' });
@@ -98,6 +105,14 @@ it('records one new chord and waits for the persisted host snapshot', () => {
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key('Period', { shiftKey: true });
   key('Period', { shiftKey: true, repeat: true });
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(editor.punctuationHotkeyStatus.textContent).toContain('Ctrl + Shift + .');
+  expect(editor.punctuationHotkeyStatus.textContent).toContain('覆盖软件里的同名快捷键');
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(false);
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('blur'));
+  confirmBinding();
+  confirmBinding();
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+Shift+Period');
   expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
   applyShortcutConfig({ toggle_punctuation: 'Ctrl+Shift+Period' });
@@ -111,6 +126,7 @@ it('records Win32 keys with no scan code and cancels them with Escape', () => {
   key('', { keyCode: 16, shiftKey: true });
   expect(editor.punctuationHotkeyStatus.textContent).toContain('Esc');
   key('', { keyCode: 190, shiftKey: true });
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+Shift+Period');
   applyShortcutConfig({ toggle_punctuation: 'Ctrl+Shift+Period' });
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
@@ -129,6 +145,7 @@ it('uses virtual keys with or without scan codes and rejects numpad aliases', ()
   key('NumpadDecimal', { keyCode: 190 });
   expect(updateConfig).not.toHaveBeenCalled();
   key('', { keyCode: 71 });
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+KeyG');
 });
 
@@ -179,6 +196,7 @@ it('rejects reserved, bare, Win and AltGr chords and ignores modifiers and repea
   expect(updateConfig).not.toHaveBeenCalled();
   key('AltLeft', { ctrlKey: false, altKey: true });
   key('Digit2', { ctrlKey: false, altKey: true });
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+Digit2');
 });
 
@@ -190,6 +208,7 @@ it.each([
   setupShortcut();
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key(code, { keyCode });
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', `Ctrl+${expected}`);
 });
 
@@ -207,6 +226,9 @@ it.each([
   key(code, options);
   expect(updateConfig).not.toHaveBeenCalled();
   expect(editor.punctuationHotkeyStatus.textContent).toContain(feature);
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
+  confirmBinding();
+  expect(updateConfig).not.toHaveBeenCalled();
 });
 
 it('requires left Alt to be pressed during recording and releases its state on keyup and blur', () => {
@@ -223,6 +245,7 @@ it('requires left Alt to be pressed during recording and releases its state on k
     code: 'AltRight', keyCode: 18, location: 2, altKey: true,
   }));
   key('KeyG', alt);
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+KeyG');
   vi.clearAllMocks();
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
@@ -238,13 +261,69 @@ it('records left Alt without a scan code when WebView2 supplies the key location
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key('', { keyCode: 18, location: 1, ctrlKey: false, altKey: true });
   key('', { keyCode: 71, ctrlKey: false, altKey: true, shiftKey: true });
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+Shift+KeyG');
 });
 
-it.each([false, true])('allows an explicit host shortcut with Shift=%s', shiftKey => {
+it.each([
+  ['KeyC', false, '复制'], ['KeyV', false, '粘贴'], ['KeyX', false, '剪切'],
+  ['KeyA', false, '全选'], ['KeyZ', false, '撤销'], ['KeyY', false, '重做'],
+  ['KeyS', false, '保存'], ['KeyF', false, '查找'], ['KeyH', false, '替换'],
+  ['KeyP', false, '打印'], ['KeyO', false, '打开'], ['KeyN', false, '新建'],
+  ['KeyW', false, '关闭'], ['F4', false, '关闭'], ['KeyT', false, '新建标签页'],
+  ['KeyV', true, '粘贴为纯文本'], ['KeyZ', true, '重做'],
+  ['KeyS', true, '另存为'], ['KeyT', true, '重新打开'],
+] as const)('warns about %s Shift=%s (%s) before saving', (code, shiftKey, action) => {
   setupShortcut();
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
-  key('KeyC', { shiftKey });
+  key(code, { shiftKey });
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
+  expect(editor.punctuationHotkeyStatus.textContent).toContain(action);
+  expect(editor.punctuationHotkeyStatus.textContent).toContain('冲突');
+  expect(editor.punctuationHotkeyStatus.textContent).toContain('中英文状态');
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(false);
+  confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation',
-    `Ctrl+${shiftKey ? 'Shift+' : ''}KeyC`);
+    `Ctrl+${shiftKey ? 'Shift+' : ''}${code}`);
+});
+
+it.each(['cancel', 'escape', 'confirmation-escape'])('keeps the original binding after %s', action => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('KeyC');
+  if (action === 'cancel') editor.punctuationHotkeyCancel.dispatchEvent(new Event('click'));
+  else if (action === 'escape') key('Escape');
+  else editor.punctuationHotkeyConfirmation.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+  confirmBinding();
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
+  expect(editor.punctuationHotkeyStatus.textContent).toBe('');
+});
+
+it('replaces a pending chord when recording starts again', () => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('KeyC');
+  key('KeyV'); // Keys outside recording cannot silently replace the pending chord.
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
+  confirmBinding();
+  expect(updateConfig).not.toHaveBeenCalled();
+  key('KeyG', { shiftKey: true });
+  expect(editor.punctuationHotkeyStatus.textContent).toContain('Ctrl + Shift + G');
+  confirmBinding();
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+Shift+KeyG');
+});
+
+it.each(['punctuationHotkeyClear', 'punctuationHotkeyReset'])('discards a pending chord on %s', id => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('KeyC');
+  editor[id].dispatchEvent(new Event('click'));
+  confirmBinding();
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation',
+    id === 'punctuationHotkeyClear' ? '' : 'Ctrl+Period');
 });
