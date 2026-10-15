@@ -245,14 +245,32 @@ UINT CaptureIpcModifiers()
     return modifiers;
 }
 
+// Ctrl+Shift+E, without Alt: the only chord a Server without InputStateShortcuts
+// recognizes, sent to it as a plain KeyEvent.
+static bool IsLegacyEnglishInputModeToggle(UINT code, UINT modifiers)
+{
+    return code == 'E' && (modifiers & 0b00000111u) == 0b00000011u;
+}
+
 bool IsEnglishInputModeToggle(UINT code, UINT modifiers)
 {
-    if ((modifiers & FanyImeKeyChord::Control) == 0 || !SupportsInputStateShortcuts())
+    if ((modifiers & FanyImeKeyChord::Control) == 0)
         return false;
+    if (!SupportsInputStateShortcuts())
+        return IsLegacyEnglishInputModeToggle(code, modifiers);
     if ((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
         modifiers |= FanyImeKeyChord::Win;
     return FanyUtils::ReadConfiguredSwitchLanguageHotkeys().input_state.Match(code, modifiers) ==
            FanyImeInputStateShortcuts::Action::EnglishCandidates;
+}
+
+// Full-width and punctuation toggles are projected by the preserved-key FIFO, so they
+// may join it while text is pending; otherwise the deferred classifier would hand the
+// chord to the application.
+static bool CanQueueHotkeyBehindBarrier(REFGUID hotkeyGuid)
+{
+    return IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidPunctuationPreserveKey) ||
+           IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidDoubleSingleBytePreserveKey);
 }
 
 // Ctrl+Enter, without Shift/Alt/Windows: commit the translation shown to the right of the
@@ -874,11 +892,10 @@ STDAPI CMetasequoiaIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARA
     GUID hotkeyGuid = {};
     if (_MatchChordInputHotkey(wParam, &hotkeyGuid))
     {
-        // Punctuation can join the preserved-action FIFO while text is pending.
-        const bool punctuation = IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidPunctuationPreserveKey);
-        if (!_HasDeferredKeyBarrier() || punctuation)
+        const bool queueable = CanQueueHotkeyBehindBarrier(hotkeyGuid);
+        if (!_HasDeferredKeyBarrier() || queueable)
         {
-            *pIsEaten = !punctuation || _DeferredKeyQueueHasCapacity() ? TRUE : FALSE;
+            *pIsEaten = !queueable || _DeferredKeyQueueHasCapacity() ? TRUE : FALSE;
             return S_OK;
         }
     }
@@ -1093,7 +1110,7 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
     {
         GUID hotkeyGuid = {};
         if (_MatchChordInputHotkey(wParam, &hotkeyGuid) &&
-            (!_HasDeferredKeyBarrier() || IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidPunctuationPreserveKey)))
+            (!_HasDeferredKeyBarrier() || CanQueueHotkeyBehindBarrier(hotkeyGuid)))
         {
             _shiftHotkeyArmed = false;
             _ctrlHotkeyArmed = false;
@@ -1320,7 +1337,12 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
             return KeyDownDispatchResult::Complete;
         }
 
-        if (KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES && !SupportsInputStateShortcuts())
+        // Without the capability the toggle goes out as the legacy KeyEvent. A custom
+        // chord queued before a reconnect to such a Server has no legacy form.
+        const bool sendInputStateAction =
+            KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES && SupportsInputStateShortcuts();
+        if (KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES && !sendInputStateAction &&
+            !IsLegacyEnglishInputModeToggle(code, capturedModifiers))
         {
             _ResetSessionAfterFailure(DeferredKeyFailureKind::Resync);
             return KeyDownDispatchResult::Complete;
@@ -1367,9 +1389,8 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
 
         PerfTimer sendKeyEventTimer;
         const KeyEventSendResult sendResult = SendKeyEventToUIProcess(
-            &requestId, KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES
-                            ? static_cast<unsigned>(FanyImeInputStateShortcuts::Action::EnglishCandidates)
-                            : 0);
+            &requestId,
+            sendInputStateAction ? static_cast<unsigned>(FanyImeInputStateShortcuts::Action::EnglishCandidates) : 0);
         if (KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES)
             KeystrokeState.Function = FUNCTION_CANCEL;
         if (KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET)

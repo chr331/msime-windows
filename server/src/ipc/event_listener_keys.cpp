@@ -951,14 +951,11 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     Global::ModifiersDown &= ~FanyImePipeFlags::SensitiveField;
     NoteAiContextKeySource(client_id, activation_epoch, sensitive_field);
 
+    // MainPipeClientThread only enqueues this from a negotiated client with a known action.
     if (namedpipeData.event_type == FanyImePipeEventType::InputStateAction)
     {
-        if (ClientNegotiatedInputStateShortcuts(client_id) &&
-            Global::Keycode == static_cast<unsigned>(FanyImeInputStateShortcuts::Action::EnglishCandidates))
-        {
-            SetEnglishInputMode(!g_english_input_mode);
-            ClearState();
-        }
+        SetEnglishInputMode(!g_english_input_mode);
+        ClearState();
         return;
     }
 

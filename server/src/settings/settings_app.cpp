@@ -397,24 +397,39 @@ static nlohmann::json CustomShuangpinSchemasJson()
     return schemas;
 }
 
+// Index of the input-state shortcut written by a config path, or Definitions.size().
+std::size_t InputStateShortcutIndex(const std::string &path)
+{
+    using namespace FanyImeInputStateShortcuts;
+    for (std::size_t i = 0; i < Definitions.size(); ++i)
+        if (path == "keybindings." + std::string(Definitions[i].key))
+            return i;
+    return Definitions.size();
+}
+
+bool IsInputStateShortcutPath(const std::string &path)
+{
+    return InputStateShortcutIndex(path) < FanyImeInputStateShortcuts::Definitions.size();
+}
+
 nlohmann::json BuildInputStateShortcutMetadata()
 {
     using namespace FanyImeInputStateShortcuts;
     const auto &configured = GetConfiguredInputStateShortcuts();
-    Values values;
-    for (std::size_t i = 0; i < values.size(); ++i)
-        values[i] = configured[i];
+    const Values values = InputStateShortcutViews(configured);
     nlohmann::json actions = nlohmann::json::array(), reserved = nlohmann::json::array(),
                    warnings = nlohmann::json::array(), keys = nlohmann::json::array();
     for (std::size_t i = 0; i < Definitions.size(); ++i)
     {
         const auto &d = Definitions[i];
-        actions.push_back(nlohmann::json{{"key", std::string(d.key)},
-                                         {"label", std::string(d.label)},
-                                         {"editor", std::string(d.editor)},
-                                         {"defaultBinding", std::string(d.defaultBinding)},
-                                         {"binding", configured[i]},
-                                         {"problem", std::string(Validate(i, values[i], values))}});
+        actions.push_back(
+            nlohmann::json{{"key", std::string(d.key)},
+                           {"label", std::string(d.label)},
+                           {"editor", std::string(d.editor)},
+                           {"defaultBinding", std::string(d.defaultBinding)},
+                           // A non-string value has no binding to show; problem explains it.
+                           {"binding", configured[i] == FanyImeKeyChord::InvalidValue ? std::string() : configured[i]},
+                           {"problem", std::string(Validate(i, values[i], values))}});
     }
     for (const auto &rule : Reserved)
         reserved.push_back(nlohmann::json{{"binding", std::string(rule.binding)}, {"label", std::string(rule.label)}});
@@ -1090,10 +1105,9 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCharacterSetShortcutEnabled(json::value_to<bool>(data.at("value")));
     if (path == "keybindings.trilingual_cycle")
         return SetConfiguredTrilingualCycleEnabled(json::value_to<bool>(data.at("value")));
-    for (std::size_t i = 0; i < FanyImeInputStateShortcuts::Definitions.size(); ++i)
-        if (path == "keybindings." + std::string(FanyImeInputStateShortcuts::Definitions[i].key))
-            return data.at("value").is_string() &&
-                   SetConfiguredInputStateShortcut(i, json::value_to<std::string>(data.at("value")));
+    if (const std::size_t index = InputStateShortcutIndex(path); index < FanyImeInputStateShortcuts::Definitions.size())
+        return data.at("value").is_string() &&
+               SetConfiguredInputStateShortcut(index, json::value_to<std::string>(data.at("value")));
     if (path.rfind("frequency_adjustment.", 0) == 0)
     {
         const std::string key = path.substr(21);
@@ -1593,8 +1607,8 @@ void HandleWebMessage(HWND hwnd, ICoreWebView2WebMessageReceivedEventArgs *args)
             const auto data = value.at("data").as_object();
             g_worker->Submit([data] {
                 const bool saved = ApplyConfigUpdate(data);
-                // This editor waits for persisted state even for a failed/no-op write.
-                const bool force_snapshot = data.at("path").as_string().find("keybindings.") == 0;
+                // The shortcut editor waits for persisted state even for a failed/no-op write.
+                const bool force_snapshot = IsInputStateShortcutPath(json::value_to<std::string>(data.at("path")));
                 auto completion = ConfigCompletion(false, force_snapshot);
                 return [saved, completion = std::move(completion)] {
                     completion();

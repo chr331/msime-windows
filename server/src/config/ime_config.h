@@ -257,6 +257,14 @@ bool SetConfiguredSwitchLanguageCtrlEnabled(bool enabled);
 bool GetConfiguredSwitchLanguageCtrlAltSpaceEnabled();
 bool SetConfiguredSwitchLanguageCtrlAltSpaceEnabled(bool enabled);
 using InputStateShortcutValues = std::array<std::string, FanyImeInputStateShortcuts::Definitions.size()>;
+// Views over values for the contract's Validate/Resolve; valid while values lives.
+inline FanyImeInputStateShortcuts::Values InputStateShortcutViews(const InputStateShortcutValues &values)
+{
+    FanyImeInputStateShortcuts::Values views;
+    for (std::size_t i = 0; i < views.size(); ++i)
+        views[i] = values[i];
+    return views;
+}
 const InputStateShortcutValues &GetConfiguredInputStateShortcuts();
 bool SetConfiguredInputStateShortcut(std::size_t index, const std::string &binding);
 const std::string &GetConfiguredShuangpinSchema();

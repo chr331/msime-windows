@@ -188,10 +188,7 @@ bool SetConfiguredInputStateShortcut(std::size_t index, const std::string &bindi
     using namespace FanyImeInputStateShortcuts;
     if (index >= Definitions.size())
         return false;
-    Values values;
-    for (std::size_t i = 0; i < values.size(); ++i)
-        values[i] = g_input_state_shortcuts[i];
-    if (!Validate(index, binding, values).empty() ||
+    if (!Validate(index, binding, InputStateShortcutViews(g_input_state_shortcuts)).empty() ||
         !WriteConfiguredValue("keybindings", std::string(Definitions[index].key), EscapeTomlBasicString(binding)))
         return false;
     g_input_state_shortcuts[index] = binding;

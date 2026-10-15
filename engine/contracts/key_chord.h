@@ -58,15 +58,17 @@ inline constexpr bool Parse(std::string_view value, Binding &result)
     result = {key, modifiers};
     return true;
 }
+// Stands in for a configured value that is not a string; Parse rejects it.
+constexpr std::string_view InvalidValue = "!invalid";
 // Used by the DLL's existing small TOML reader; invalid types stay invalid.
 inline std::string_view TomlString(std::string_view value)
 {
     const auto begin = value.find_first_not_of(" \t\r");
     if (begin == std::string_view::npos)
-        return "!invalid";
+        return InvalidValue;
     value = value.substr(begin, value.find_last_not_of(" \t\r") - begin + 1);
     if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') && value.back() == value.front())
         return value.substr(1, value.size() - 2);
-    return "!invalid";
+    return InvalidValue;
 }
 } // namespace FanyImeKeyChord

@@ -1060,8 +1060,11 @@ void CMetasequoiaIME::_DrainOneDeferredKeyDown()
     if (_serverUnavailableFallbackActive)
     {
         _KEYSTROKE_STATE offlineState = key.keyState;
-        if (offlineState.Function == FUNCTION_CYCLE_INPUT_MODE ||
-            offlineState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES)
+        // The English-candidate toggle projects no state; offline it only clears
+        // the composition, as it did before it had its own function.
+        if (offlineState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES)
+            offlineState.Function = FUNCTION_CANCEL;
+        if (offlineState.Function == FUNCTION_CYCLE_INPUT_MODE)
         {
             // Its tail was classified for the projected destination. The
             // cycle cannot run offline, so discard that tail through the

@@ -107,6 +107,21 @@ it('applies default, custom and explicitly disabled bindings without writing bac
   expect(updateConfig).not.toHaveBeenCalled();
 });
 
+it('re-enables the editors when the host never answers a save', () => {
+  vi.useFakeTimers();
+  try {
+    editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+    key('Period', { shiftKey: true });
+    expect((editor.fullWidthHotkeyButton as unknown as HTMLButtonElement).disabled).toBe(true);
+    vi.advanceTimersByTime(5000);
+    expect((editor.fullWidthHotkeyButton as unknown as HTMLButtonElement).disabled).toBe(false);
+    expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
+    expect(editor.punctuationHotkeyStatus.textContent).toContain('请重试');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('saves a chord with no known conflict once and waits for the persisted host snapshot', () => {
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key('Period', { shiftKey: true });

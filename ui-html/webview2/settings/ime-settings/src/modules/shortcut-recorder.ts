@@ -14,6 +14,15 @@ let editors = new Map<string, Editor>();
 let active: Editor | undefined;
 let saving = false;
 let ready = false;
+// The host echoes a snapshot after every write; without one, give the editors back.
+const SAVE_TIMEOUT_MS = 5000;
+let savingTimer: ReturnType<typeof setTimeout> | undefined;
+
+function endSaving(): void {
+  saving = false;
+  clearTimeout(savingTimer);
+  savingTimer = undefined;
+}
 
 function format(binding: string): string {
   return binding ? binding.split('+').map(key => metadata?.keys.find(k => k.code === key)?.label ??
@@ -78,6 +87,11 @@ function createEditor(key: string, prefix: string): Editor | undefined {
     }
     finish('正在保存…');
     saving = true;
+    savingTimer = setTimeout(() => {
+      endSaving();
+      editors.forEach(item => item.render());
+      finish('保存未完成，请重试。');
+    }, SAVE_TIMEOUT_MS);
     editors.forEach(item => item.render());
     updateConfig(`keybindings.${key}`, binding);
   };
@@ -134,14 +148,14 @@ function ensureEditors(): void {
   }
 }
 export function setupInputStateShortcuts(): void {
-  editors = new Map(); active = undefined; saving = false; ready = true;
+  editors = new Map(); active = undefined; endSaving(); ready = true;
   ensureEditors();
 }
 export function applyInputStateShortcuts(value?: ShortcutMetadata): void {
   if (!value) return;
   const changed = JSON.stringify(metadata) !== JSON.stringify(value);
   metadata = value;
-  saving = false;
+  endSaving();
   ensureEditors();
   if (changed) active?.finish();
   editors.forEach((editor, key) => {

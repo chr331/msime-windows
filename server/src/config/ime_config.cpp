@@ -58,8 +58,9 @@ bool g_switch_language_ctrl_alt_space_enabled = true;
 bool g_character_set_shortcut_enabled = true;
 InputStateShortcutValues g_input_state_shortcuts = [] {
     InputStateShortcutValues values;
+    const auto defaults = FanyImeInputStateShortcuts::Defaults();
     for (std::size_t i = 0; i < values.size(); ++i)
-        values[i] = FanyImeInputStateShortcuts::Definitions[i].defaultBinding;
+        values[i] = defaults[i];
     return values;
 }();
 int g_candidate_page_size = 8;
@@ -698,8 +699,8 @@ bool LoadImeConfig()
             {
                 const auto &definition = FanyImeInputStateShortcuts::Definitions[i];
                 const auto value = tbl["keybindings"][definition.key];
-                g_input_state_shortcuts[i] =
-                    value ? value.value_or(std::string("!invalid")) : std::string(definition.defaultBinding);
+                g_input_state_shortcuts[i] = value ? value.value_or(std::string(FanyImeKeyChord::InvalidValue))
+                                                   : std::string(definition.defaultBinding);
             }
         }
         {
