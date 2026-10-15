@@ -995,8 +995,8 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         return;
     }
 
-    if (!ClientNegotiatedInputStateShortcuts(client_id) &&
-        FanyImeIpc::IsEnglishModeToggleKey(Global::Keycode, Global::ModifiersDown))
+    if (FanyImeIpc::IsEnglishModeToggleKey(Global::Keycode, Global::ModifiersDown) &&
+        !ClientNegotiatedInputStateShortcuts(client_id))
     {
         SetEnglishInputMode(!g_english_input_mode);
         ClearState();

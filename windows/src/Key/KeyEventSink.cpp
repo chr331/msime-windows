@@ -246,7 +246,7 @@ UINT CaptureIpcModifiers()
 
 bool IsEnglishInputModeToggle(UINT code, UINT modifiers)
 {
-    if (!SupportsInputStateShortcuts())
+    if ((modifiers & FanyImeKeyChord::Control) == 0 || !SupportsInputStateShortcuts())
         return false;
     if ((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
         modifiers |= FanyImeKeyChord::Win;
