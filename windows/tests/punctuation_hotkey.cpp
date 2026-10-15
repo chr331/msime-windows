@@ -20,14 +20,24 @@ int main()
     for (unsigned modifiers = 0; modifiers < 16; ++modifiers)
         if (!check(binding.Matches(0xbe, modifiers) == (modifiers == (Control | Shift)), "exact modifiers"))
             return 1;
-    for (const auto value : {"Ctrl+Shift+KeyE", "Ctrl+Shift+KeyF", "Ctrl+F9", "Alt+F4", "Ctrl+Space",
-                             "Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Period", "Win+Period", "Shift+KeyA", "Ctrl+",
-                             "Ctrl+F13", "Ctrl+Digit10", "Ctrl+Keya", "Period", "true"})
+    for (const auto value : {"Ctrl+Shift+KeyE", "Ctrl+Shift+KeyF", "Ctrl+F9", "Ctrl+Shift+F9", "Alt+F4", "Alt+Shift+F4",
+                             "Ctrl+Space", "Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Period", "Win+Period",
+                             "Shift+KeyA", "Ctrl+", "Ctrl+F13", "Ctrl+Digit10", "Ctrl+Keya", "Period", "true"})
         if (!check(!Parse(value, binding) && binding.key == 0, value))
             return 1;
     for (const auto value : {"Ctrl+KeyA", "Alt+Shift+Digit3", "Alt+F12", "Ctrl+BracketLeft", "Ctrl+Quote"})
         if (!check(Parse(value, binding) && binding.key != 0, value))
             return 1;
+    for (const auto value : {"Alt+KeyG", "Alt+Shift+Period"})
+    {
+        if (!check(Parse(value, binding), value))
+            return 1;
+        for (unsigned modifiers = 0; modifiers < 16; ++modifiers)
+            if (!check(binding.Matches(binding.key, modifiers, false) == (modifiers == binding.modifiers) &&
+                           !binding.Matches(binding.key, modifiers, true),
+                       "left Alt only, including with Shift"))
+                return 1;
+    }
     if (!check(KeyCode("F1") == 0x70 && KeyCode("F9") == 0x78 && KeyCode("F10") == 0x79 && KeyCode("F12") == 0x7b &&
                    KeyCode("Digit0") == '0' && KeyCode("KeyZ") == 'Z',
                "VK mapping") ||

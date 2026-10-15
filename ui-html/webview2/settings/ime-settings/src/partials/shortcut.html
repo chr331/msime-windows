@@ -1,6 +1,6 @@
 <div class="content shortcut-settings" id="shortcut-settings">
   <div class="content-header"><span>快捷键</span></div>
-  <div class="shortcut-intro">输入法快捷键仅在对应输入状态或候选窗口显示时生效。翻页方式可在“输入”中启用或关闭。</div>
+  <div class="shortcut-intro">各快捷键的生效范围见下方说明。翻页方式可在“输入”中启用或关闭。</div>
 
   <div class="section shortcut-section section-page-option">
     <div class="shortcut-section-heading"><div><div class="section-title">简繁切换</div><div class="shortcut-section-description">仅在中文输入状态生效，切换时保留正在输入的内容</div></div></div>
@@ -43,7 +43,7 @@
       <div class="shortcut-row"><span>切换英文候选模式（保持中文状态，以英文单词作为候选）</span><div class="shortcut-keys"><kbd>Ctrl</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>E</kbd></div></div>
       <div class="shortcut-row"><span>全角 / 半角切换</span><div class="shortcut-keys"><kbd>Ctrl</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>Space</kbd></div></div>
       <div class="shortcut-row">
-        <span>中文 / 英文标点切换（开启标点锁定时不生效）</span>
+        <span>中文 / 英文标点切换</span>
         <div class="punctuation-hotkey-editor">
           <div class="punctuation-hotkey-actions">
             <button type="button" id="punctuationHotkeyButton" aria-label="修改标点切换快捷键" aria-pressed="false" aria-describedby="punctuationHotkeyStatus">Ctrl + .</button>
@@ -53,6 +53,7 @@
           <span id="punctuationHotkeyStatus" role="status" aria-live="polite"></span>
         </div>
       </div>
+      <div class="shortcut-section-description punctuation-hotkey-description">绑定后，中英文状态下均由输入法接收该组合键，应用中的同名快捷键会被覆盖；标点锁定时保持锁定模式。点击“清空”可交还给应用。Alt 绑定使用左 Alt，右 Alt 保留给语音输入和 AltGr。</div>
     </div>
   </div>
 

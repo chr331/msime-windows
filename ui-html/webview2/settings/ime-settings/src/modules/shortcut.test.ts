@@ -73,8 +73,11 @@ it('accepts older configuration snapshots with no shortcut field', () => {
 });
 
 function key(code: string, options: Record<string, unknown> = {}): Event {
+  const keyCode = /^Key[A-Z]$/.test(code) ? code.charCodeAt(3) : /^Digit[0-9]$/.test(code) ? code.charCodeAt(5) :
+    /^F\d+$/.test(code) ? 111 + Number(code.slice(1)) : ({ Period: 190, ControlLeft: 17, AltLeft: 18,
+      AltRight: 18, Escape: 27, Tab: 9 } as Record<string, number>)[code] ?? 0;
   const event = Object.assign(new Event('keydown', { cancelable: true }), {
-    code, ctrlKey: true, altKey: false, shiftKey: false, metaKey: false, repeat: false,
+    code, keyCode, location: 0, ctrlKey: true, altKey: false, shiftKey: false, metaKey: false, repeat: false,
     getModifierState: () => false, ...options,
   });
   editor.punctuationHotkeyButton.dispatchEvent(event);
@@ -84,7 +87,7 @@ function key(code: string, options: Record<string, unknown> = {}): Event {
 it('applies default, custom and explicitly disabled bindings without writing back', () => {
   expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
   applyShortcutConfig({ toggle_punctuation: 'Alt+KeyA' });
-  expect(editor.punctuationHotkeyButton.textContent).toBe('Alt + A');
+  expect(editor.punctuationHotkeyButton.textContent).toBe('左 Alt + A');
   applyShortcutConfig({ toggle_punctuation: '' });
   expect(editor.punctuationHotkeyButton.textContent).toBe('未绑定');
   expect(updateConfig).not.toHaveBeenCalled();
@@ -118,7 +121,7 @@ it('records Win32 keys with no scan code and cancels them with Escape', () => {
   expect(updateConfig).toHaveBeenCalledTimes(1);
 });
 
-it('uses the virtual key fallback only for an empty code and keeps conflict checks', () => {
+it('uses virtual keys with or without scan codes and rejects numpad aliases', () => {
   setupShortcut();
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key('', { keyCode: 70, shiftKey: true });
@@ -165,12 +168,83 @@ it('rejects reserved, bare, Win and AltGr chords and ignores modifiers and repea
   key('KeyF', { shiftKey: true });
   key('KeyE', { shiftKey: true });
   key('F9');
+  key('F9', { shiftKey: true });
+  key('AltLeft', { ctrlKey: false, altKey: true });
   key('F4', { ctrlKey: false, altKey: true });
+  key('F4', { ctrlKey: false, altKey: true, shiftKey: true });
   key('Period', { ctrlKey: false });
   key('Period', { metaKey: true });
   key('Period', { altKey: true });
   key('Period', { getModifierState: () => true });
   expect(updateConfig).not.toHaveBeenCalled();
+  key('AltLeft', { ctrlKey: false, altKey: true });
   key('Digit2', { ctrlKey: false, altKey: true });
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+Digit2');
+});
+
+it.each([
+  ['KeyQ', 65, 'KeyA'], // AZERTY: physical Q produces VK_A.
+  ['KeyY', 90, 'KeyZ'], // QWERTZ: physical Y produces VK_Z.
+  ['Semicolon', 188, 'Comma'], // OEM keys also follow the Windows VK.
+])('records %s using its Windows virtual key', (code, keyCode, expected) => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key(code, { keyCode });
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', `Ctrl+${expected}`);
+});
+
+it.each([
+  ['KeyE', { shiftKey: true }, '英文候选'],
+  ['KeyF', { shiftKey: true }, '简繁'],
+  ['F9', {}, '语音'],
+  ['F9', { shiftKey: true }, '语音'],
+  ['F4', { ctrlKey: false, altKey: true }, '关闭窗口'],
+  ['F4', { ctrlKey: false, altKey: true, shiftKey: true }, '关闭窗口'],
+])('names the feature that owns %s %j', (code, options, feature) => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('AltLeft', { ctrlKey: false, altKey: true });
+  key(code, options);
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(editor.punctuationHotkeyStatus.textContent).toContain(feature);
+});
+
+it('requires left Alt to be pressed during recording and releases its state on keyup and blur', () => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  const alt = { ctrlKey: false, altKey: true };
+  key('KeyG', alt); // Alt held before recording has no known side.
+  key('AltRight', alt);
+  key('KeyG', alt);
+  key('AltLeft', alt); // Both sides down still belong to the right-Alt shortcut.
+  key('KeyG', alt);
+  expect(updateConfig).not.toHaveBeenCalled();
+  editor.punctuationHotkeyButton.dispatchEvent(Object.assign(new Event('keyup'), {
+    code: 'AltRight', keyCode: 18, location: 2, altKey: true,
+  }));
+  key('KeyG', alt);
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+KeyG');
+  vi.clearAllMocks();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('AltLeft', alt);
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('blur'));
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('KeyG', alt);
+  expect(updateConfig).not.toHaveBeenCalled();
+});
+
+it('records left Alt without a scan code when WebView2 supplies the key location', () => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('', { keyCode: 18, location: 1, ctrlKey: false, altKey: true });
+  key('', { keyCode: 71, ctrlKey: false, altKey: true, shiftKey: true });
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+Shift+KeyG');
+});
+
+it.each([false, true])('allows an explicit host shortcut with Shift=%s', shiftKey => {
+  setupShortcut();
+  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
+  key('KeyC', { shiftKey });
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation',
+    `Ctrl+${shiftKey ? 'Shift+' : ''}KeyC`);
 });

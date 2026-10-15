@@ -10,9 +10,9 @@ struct Binding
 {
     unsigned key = 0;
     unsigned modifiers = 0;
-    constexpr bool Matches(unsigned code, unsigned pressed) const
+    constexpr bool Matches(unsigned code, unsigned pressed, bool rightAlt = false) const
     {
-        return key != 0 && key == code && modifiers == pressed;
+        return key != 0 && key == code && modifiers == pressed && (!(modifiers & Alt) || !rightAlt);
     }
 };
 constexpr Binding DefaultBinding{0xbe, Control};
@@ -41,6 +41,7 @@ inline unsigned KeyCode(std::string_view code)
 }
 
 // Empty explicitly disables. Only canonical Ctrl/Alt[+Shift]+code is accepted;
+// Alt means left Alt; right Alt is used by voice input / AltGr.
 // Ctrl+Alt (including AltGr), Win and product-owned chords are not bindable here.
 inline bool Parse(std::string_view value, Binding &result)
 {
@@ -62,8 +63,8 @@ inline bool Parse(std::string_view value, Binding &result)
     }
     const unsigned key = KeyCode(value);
     if (key == 0 || (modifiers == (Control | Shift) && (key == 'E' || key == 'F')) ||
-        (modifiers == Control && key == 0x78) || (modifiers == Alt && key == 0x73))
-        return false; // Ctrl+Shift+E/F, voice Ctrl+F9, and Alt+F4.
+        ((modifiers & Control) && key == 0x78) || ((modifiers & Alt) && key == 0x73))
+        return false; // Ctrl+Shift+E/F, voice Ctrl[+Shift]+F9, and Alt[+Shift]+F4.
     result = {key, modifiers};
     return true;
 }

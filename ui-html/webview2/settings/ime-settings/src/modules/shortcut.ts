@@ -11,14 +11,15 @@ function displayPunctuationHotkey(): void {
   const button = document.getElementById('punctuationHotkeyButton');
   if (button && button.getAttribute('aria-pressed') !== 'true') {
     button.textContent = punctuationHotkey ? punctuationHotkey.split('+').map(key =>
-      PUNCTUATION_KEYS[key] ?? key.replace(/^(Key|Digit)/, '')).join(' + ') : '未绑定';
+      PUNCTUATION_KEYS[key] ?? (key === 'Alt' ? '左 Alt' : key.replace(/^(Key|Digit)/, ''))).join(' + ') : '未绑定';
   }
 }
 
 function punctuationEventCode(event: KeyboardEvent): string {
-  if (event.code) return event.code;
-  // Win32 keystrokes without a scan code have an empty code in WebView2.
-  // Its legacy keyCode still carries the virtual key used by the TSF matcher.
+  // code identifies the physical key; WebView2 keyCode carries the Windows VK
+  // used by TSF, including when a keyboard layout remaps letters or OEM keys.
+  if (/^(Control|Shift|Alt|Meta)(Left|Right)$/.test(event.code)) return event.code;
+  if (event.code.startsWith('Numpad') || event.location === 3) return '';
   const vk = event.keyCode;
   if (vk >= 65 && vk <= 90) return `Key${String.fromCharCode(vk)}`;
   if (vk >= 48 && vk <= 57) return `Digit${vk - 48}`;
@@ -35,14 +36,26 @@ function recordedPunctuationHotkey(event: KeyboardEvent, code: string): string |
   if (event.metaKey || event.ctrlKey === event.altKey || event.getModifierState('AltGraph')) return null;
   if (!/^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2]))$/.test(code) && !(code in PUNCTUATION_KEYS)) return null;
   const binding = `${event.ctrlKey ? 'Ctrl' : 'Alt'}+${event.shiftKey ? 'Shift+' : ''}${code}`;
-  return ['Ctrl+Shift+KeyE', 'Ctrl+Shift+KeyF', 'Ctrl+F9', 'Alt+F4'].includes(binding) ? null : binding;
+  return binding;
 }
+
+const PUNCTUATION_HOTKEY_CONFLICTS: Record<string, string> = {
+  'Ctrl+Shift+KeyE': 'Ctrl + Shift + E 用于切换英文候选模式。',
+  'Ctrl+Shift+KeyF': 'Ctrl + Shift + F 用于简繁切换。',
+  'Ctrl+F9': 'Ctrl + F9 用于语音输入。',
+  'Ctrl+Shift+F9': 'Ctrl + Shift + F9 用于语音输入。',
+  'Alt+F4': '左 Alt + F4 用于关闭窗口。',
+  'Alt+Shift+F4': '左 Alt + Shift + F4 用于关闭窗口。',
+};
 
 function setupPunctuationHotkey(): void {
   const button = document.getElementById('punctuationHotkeyButton') as HTMLButtonElement | null;
   const status = document.getElementById('punctuationHotkeyStatus');
   if (!button) return;
+  let leftAlt = false;
+  let rightAlt = false;
   const finish = (message = '') => {
+    leftAlt = rightAlt = false;
     button.setAttribute('aria-pressed', 'false');
     displayPunctuationHotkey();
     if (status) status.textContent = message;
@@ -57,7 +70,7 @@ function setupPunctuationHotkey(): void {
     if (button.getAttribute('aria-pressed') === 'true') return finish();
     button.setAttribute('aria-pressed', 'true');
     button.textContent = '请按下快捷键';
-    if (status) status.textContent = 'Ctrl 或 Alt + 主键，可加 Shift；Esc 取消，Tab 离开。';
+    if (status) status.textContent = 'Ctrl 或左 Alt + 字母、数字、F1–F12、标点，可加 Shift；Esc 取消，Tab 离开。';
   });
   button.addEventListener('blur', () => finish());
   button.addEventListener('keydown', event => {
@@ -66,13 +79,29 @@ function setupPunctuationHotkey(): void {
     event.preventDefault();
     event.stopPropagation();
     if (code === 'Escape') return finish();
+    if (!event.altKey) leftAlt = rightAlt = false;
+    if (code === 'AltLeft' && (event.code === 'AltLeft' || event.location === 1)) leftAlt = true;
+    if (code === 'AltRight' || (event.keyCode === 18 && event.location === 2)) rightAlt = true;
     if (event.repeat || /^(Control|Shift|Alt|Meta)(Left|Right)$/.test(code)) return;
+    if (event.altKey && (!leftAlt || rightAlt)) {
+      if (status) status.textContent = '请松开 Alt，再使用左 Alt 录制；右 Alt 用于语音输入和 AltGr。';
+      return;
+    }
     const binding = recordedPunctuationHotkey(event, code);
     if (binding === null) {
-      if (status) status.textContent = '此组合不支持或已被系统/输入法占用，请选择其他组合。';
+      if (status) status.textContent = '请选择 Ctrl 或左 Alt + 字母、数字、F1–F12、标点，可加 Shift。';
+      return;
+    }
+    if (PUNCTUATION_HOTKEY_CONFLICTS[binding]) {
+      if (status) status.textContent = PUNCTUATION_HOTKEY_CONFLICTS[binding];
       return;
     }
     save(binding);
+  });
+  button.addEventListener('keyup', event => {
+    if (!event.altKey) leftAlt = rightAlt = false;
+    if (event.code === 'AltLeft' || (event.keyCode === 18 && event.location === 1)) leftAlt = false;
+    if (event.code === 'AltRight' || (event.keyCode === 18 && event.location === 2)) rightAlt = false;
   });
   document.getElementById('punctuationHotkeyClear')?.addEventListener('click', () => save(''));
   document.getElementById('punctuationHotkeyReset')?.addEventListener('click', () => save(DEFAULT_PUNCTUATION_HOTKEY));

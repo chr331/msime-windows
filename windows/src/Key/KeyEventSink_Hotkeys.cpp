@@ -314,7 +314,7 @@ bool CMetasequoiaIME::_MatchChordInputHotkey(WPARAM wParam, _Out_ GUID *hotkeyGu
     const unsigned modifiers = (shift ? FanyImePunctuationHotkey::Shift : 0) |
                                (ctrl ? FanyImePunctuationHotkey::Control : 0) |
                                (alt ? FanyImePunctuationHotkey::Alt : 0) | (win ? FanyImePunctuationHotkey::Win : 0);
-    if (hotkeys.punctuation.Matches(code, modifiers))
+    if (hotkeys.punctuation.Matches(code, modifiers, (GetKeyState(VK_RMENU) & 0x8000) != 0))
     {
         *hotkeyGuid = Global::MetasequoiaIMEGuidPunctuationPreserveKey;
         return true;
