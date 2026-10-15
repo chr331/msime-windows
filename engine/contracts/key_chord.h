@@ -7,9 +7,9 @@ constexpr unsigned Shift = 1, Control = 2, Alt = 4, Win = 8;
 struct Binding
 {
     unsigned key = 0, modifiers = 0;
-    constexpr bool Matches(unsigned code, unsigned pressed, bool rightAlt = false) const
+    constexpr bool Matches(unsigned code, unsigned pressed) const
     {
-        return key != 0 && key == code && modifiers == pressed && (!(modifiers & Alt) || !rightAlt);
+        return key != 0 && key == code && modifiers == pressed;
     }
 };
 struct KeyName
@@ -37,20 +37,16 @@ inline constexpr unsigned KeyCode(std::string_view code)
             return entry.key;
     return 0;
 }
-// Canonical Ctrl/left Alt [+Shift] + one Windows virtual key. Empty disables.
+// Canonical Ctrl [+Shift] + one Windows virtual key. Empty disables.
 inline constexpr bool Parse(std::string_view value, Binding &result)
 {
     result = {};
     if (value.empty())
         return true;
-    unsigned modifiers = 0;
-    if (value.substr(0, 5) == "Ctrl+")
-        modifiers = Control;
-    else if (value.substr(0, 4) == "Alt+")
-        modifiers = Alt;
-    else
+    if (value.substr(0, 5) != "Ctrl+")
         return false;
-    value.remove_prefix(modifiers == Control ? 5 : 4);
+    unsigned modifiers = Control;
+    value.remove_prefix(5);
     if (value.substr(0, 6) == "Shift+")
     {
         modifiers |= Shift;

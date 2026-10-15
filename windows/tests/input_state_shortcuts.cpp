@@ -93,7 +93,8 @@ int main()
     for (const auto &key : NamedKeys)
         CHECK(KeyCode(key.name) == key.key);
     Binding binding;
-    for (const auto value : {"Ctrl+Alt+Period", "Win+KeyA", "Shift+KeyA", "Ctrl+", "Ctrl+F13", "Ctrl+Keya", "true"})
+    for (const auto value : {"Alt+KeyJ", "Alt+Shift+KeyJ", "Ctrl+Alt+Period", "Win+KeyA", "Shift+KeyA", "Ctrl+",
+                             "Ctrl+F13", "Ctrl+Keya", "true"})
         CHECK(!Parse(value, binding) && binding.key == 0);
     for (const auto &rule : Reserved)
         CHECK(!Validate(2, rule.binding, values).empty());
@@ -106,17 +107,21 @@ int main()
     values[2] = "Ctrl+Shift+KeyG";
     resolved = Resolve(values);
     CHECK(resolved.bindings[1].key == 0 && resolved.bindings[2].key == 0);
-    CHECK(Validate(1, "Alt+KeyG", values).empty());
-    values[1] = "Alt+KeyG";
+    for (const auto value : {"Alt+KeyJ", "Alt+Shift+KeyJ"})
+    {
+        CHECK(!Validate(1, value, values).empty());
+        values[1] = value;
+        CHECK(Resolve(values).bindings[1].key == 0);
+        CHECK(Resolve(values).Match('J', Alt) == static_cast<Action>(0));
+        CHECK(Resolve(values).Match('J', Alt | Shift) == static_cast<Action>(0));
+    }
+    values[1] = "Ctrl+Shift+KeyH";
     resolved = Resolve(values);
     for (unsigned modifiers = 0; modifiers < 16; ++modifiers)
-    {
-        CHECK(resolved.bindings[1].Matches('G', modifiers) == (modifiers == Alt));
-        CHECK(!resolved.bindings[1].Matches('G', modifiers, true));
-    }
+        CHECK(resolved.bindings[1].Matches('H', modifiers) == (modifiers == (Control | Shift)));
     values[2] = "invalid";
     CHECK(Resolve(values).bindings[2].key == 0);
-    CHECK(Resolve(values).bindings[1].key == 'G');
+    CHECK(Resolve(values).bindings[1].key == 'H');
     CHECK(TomlString(" 'Ctrl+Space' ") == "Ctrl+Space");
     CHECK(TomlString("true") == "!invalid");
     CHECK(Validate(2, "Ctrl+KeyC", values).empty());

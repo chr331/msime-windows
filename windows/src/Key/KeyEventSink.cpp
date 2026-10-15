@@ -250,8 +250,7 @@ bool IsEnglishInputModeToggle(UINT code, UINT modifiers)
         return false;
     if ((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
         modifiers |= FanyImeKeyChord::Win;
-    return FanyUtils::ReadConfiguredSwitchLanguageHotkeys().input_state.Match(
-               code, modifiers, (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ==
+    return FanyUtils::ReadConfiguredSwitchLanguageHotkeys().input_state.Match(code, modifiers) ==
            FanyImeInputStateShortcuts::Action::EnglishCandidates;
 }
 

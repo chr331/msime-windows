@@ -100,8 +100,8 @@ function confirmBinding(): void {
 
 it('applies default, custom and explicitly disabled bindings without writing back', () => {
   expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
-  applyBinding('Alt+KeyA');
-  expect(editor.punctuationHotkeyButton.textContent).toBe('左 Alt + A');
+  applyBinding('Ctrl+KeyA');
+  expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + A');
   applyBinding('');
   expect(editor.punctuationHotkeyButton.textContent).toBe('未绑定');
   expect(updateConfig).not.toHaveBeenCalled();
@@ -192,10 +192,9 @@ it('rejects reserved, bare, Win and AltGr chords and ignores modifiers and repea
   key('Period', { altKey: true });
   key('Period', { getModifierState: () => true });
   expect(updateConfig).not.toHaveBeenCalled();
-  key('AltLeft', { ctrlKey: false, altKey: true });
-  key('Digit2', { ctrlKey: false, altKey: true });
+  key('Digit2');
   confirmBinding();
-  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+Digit2');
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+Digit2');
 });
 
 it.each([
@@ -214,8 +213,6 @@ it.each([
   ['KeyF', { shiftKey: true }, '简繁'],
   ['F9', {}, '语音'],
   ['F9', { shiftKey: true }, '语音'],
-  ['F4', { ctrlKey: false, altKey: true }, '关闭窗口'],
-  ['F4', { ctrlKey: false, altKey: true, shiftKey: true }, '关闭窗口'],
 ])('names the feature that owns %s %j', (code, options, feature) => {
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key('AltLeft', { ctrlKey: false, altKey: true });
@@ -227,36 +224,33 @@ it.each([
   expect(updateConfig).not.toHaveBeenCalled();
 });
 
-it('requires left Alt to be pressed during recording and releases its state on keyup and blur', () => {
-  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
-  const alt = { ctrlKey: false, altKey: true };
-  key('KeyG', alt); // Alt held before recording has no known side.
-  key('AltRight', alt);
-  key('KeyG', alt);
-  key('AltLeft', alt); // Both sides down still belong to the right-Alt shortcut.
-  key('KeyG', alt);
-  expect(updateConfig).not.toHaveBeenCalled();
-  editor.punctuationHotkeyButton.dispatchEvent(Object.assign(new Event('keyup'), {
-    code: 'AltRight', keyCode: 18, location: 2, altKey: true,
-  }));
-  key('KeyG', alt);
-  confirmBinding();
-  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+KeyG');
-  vi.clearAllMocks();
-  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
-  key('AltLeft', alt);
-  editor.punctuationHotkeyButton.dispatchEvent(new Event('blur'));
-  editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
-  key('KeyG', alt);
-  expect(updateConfig).not.toHaveBeenCalled();
+it.each([false, true])('rejects Alt chords with Shift=%s for all three actions', shiftKey => {
+  for (const action of snapshot.actions) {
+    const button = editor[action.editor + 'Button'];
+    button.dispatchEvent(new Event('click'));
+    for (const code of ['AltLeft', 'AltRight', '']) {
+      button.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), {
+        code, keyCode: 18, location: code === 'AltRight' ? 2 : 1,
+        ctrlKey: false, altKey: true, shiftKey, getModifierState: () => false,
+      }));
+      button.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), {
+        code: 'KeyJ', keyCode: 74, ctrlKey: false, altKey: true, shiftKey,
+        getModifierState: () => false,
+      }));
+      expect(updateConfig).not.toHaveBeenCalled();
+      expect(editor[action.editor + 'Status'].textContent).toContain('请选择 Ctrl');
+      expect(button.getAttribute('aria-pressed')).toBe('true');
+    }
+  }
 });
 
-it('records left Alt without a scan code when WebView2 supplies the key location', () => {
+it('accepts Ctrl after rejecting an Alt chord in the same recording', () => {
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
-  key('', { keyCode: 18, location: 1, ctrlKey: false, altKey: true });
-  key('', { keyCode: 71, ctrlKey: false, altKey: true, shiftKey: true });
+  key('KeyJ', { ctrlKey: false, altKey: true });
+  expect(updateConfig).not.toHaveBeenCalled();
+  key('KeyJ', { shiftKey: true });
   confirmBinding();
-  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Alt+Shift+KeyG');
+  expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+Shift+KeyJ');
 });
 
 it.each([
@@ -374,8 +368,8 @@ it('invalidates pending confirmation when another snapshot changes ownership', (
   expect(updateConfig).not.toHaveBeenCalled();
   expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
 });
-it('shows a malformed config problem until it is repaired', () => {
-  snapshot.actions[1].binding = 'garbage';
+it.each(['garbage', 'Alt+KeyJ', 'Alt+Shift+KeyJ'])('shows an invalid config binding %s until it is repaired', binding => {
+  snapshot.actions[1].binding = binding;
   snapshot.actions[1].problem = '快捷键格式无效';
   applyShortcutConfig({ input_state_shortcuts: structuredClone(snapshot) });
   expect(editor.fullWidthHotkeyStatus.textContent).toContain('停用');

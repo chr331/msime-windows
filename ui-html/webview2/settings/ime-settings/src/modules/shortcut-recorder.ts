@@ -17,7 +17,7 @@ let ready = false;
 
 function format(binding: string): string {
   return binding ? binding.split('+').map(key => metadata?.keys.find(k => k.code === key)?.label ??
-    (key === 'Alt' ? '左 Alt' : key.replace(/^(Key|Digit)/, ''))).join(' + ') : '未绑定';
+    key.replace(/^(Key|Digit)/, '')).join(' + ') : '未绑定';
 }
 function eventCode(event: KeyboardEvent): string {
   if (/^(Control|Shift|Alt|Meta)(Left|Right)$/.test(event.code)) return event.code;
@@ -40,7 +40,6 @@ function createEditor(key: string, prefix: string): Editor | undefined {
   const status = document.getElementById(`${prefix}Status`);
   const confirmation = document.getElementById(`${prefix}Confirmation`);
   if (!button) return;
-  let leftAlt = false, rightAlt = false;
   let pending: string | undefined;
   const action = () => metadata!.actions.find(item => item.key === key)!;
   const render = () => {
@@ -51,7 +50,6 @@ function createEditor(key: string, prefix: string): Editor | undefined {
     }
   };
   const finish = (message = '') => {
-    leftAlt = rightAlt = false;
     pending = undefined;
     if (active === editor) active = undefined;
     if (confirmation) confirmation.hidden = true;
@@ -91,7 +89,7 @@ function createEditor(key: string, prefix: string): Editor | undefined {
     active = editor;
     button.setAttribute('aria-pressed', 'true');
     button.textContent = '请按下快捷键';
-    if (status) status.textContent = 'Ctrl 或左 Alt + 字母、数字、F1–F12、标点、Space，可加 Shift；Esc 取消，Tab 离开。';
+    if (status) status.textContent = 'Ctrl + 字母、数字、F1–F12、标点、Space，可加 Shift；Esc 取消，Tab 离开。';
   });
   button.addEventListener('blur', () => {
     if (button.getAttribute('aria-pressed') === 'true') finish();
@@ -104,25 +102,13 @@ function createEditor(key: string, prefix: string): Editor | undefined {
     if (button.getAttribute('aria-pressed') !== 'true' || code === 'Tab') return;
     event.preventDefault(); event.stopPropagation();
     if (code === 'Escape') return finish();
-    if (!event.altKey) leftAlt = rightAlt = false;
-    if (code === 'AltLeft' && (event.code === 'AltLeft' || event.location === 1)) leftAlt = true;
-    if (code === 'AltRight' || (event.keyCode === 18 && event.location === 2)) rightAlt = true;
     if (event.repeat || /^(Control|Shift|Alt|Meta)(Left|Right)$/.test(code)) return;
-    if (event.altKey && (!leftAlt || rightAlt)) {
-      if (status) status.textContent = '请松开 Alt，再使用左 Alt 录制；右 Alt 用于语音输入和 AltGr。';
-      return;
-    }
-    if (event.metaKey || event.ctrlKey === event.altKey || event.getModifierState('AltGraph') ||
+    if (event.metaKey || !event.ctrlKey || event.altKey || event.getModifierState('AltGraph') ||
         (!/^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2]))$/.test(code) && !metadata?.keys.some(k => k.code === code))) {
-      if (status) status.textContent = '请选择 Ctrl 或左 Alt + 字母、数字、F1–F12、标点、Space，可加 Shift。';
+      if (status) status.textContent = '请选择 Ctrl + 字母、数字、F1–F12、标点、Space，可加 Shift。';
       return;
     }
-    save(`${event.ctrlKey ? 'Ctrl' : 'Alt'}+${event.shiftKey ? 'Shift+' : ''}${code}`);
-  });
-  button.addEventListener('keyup', event => {
-    if (!event.altKey) leftAlt = rightAlt = false;
-    if (event.code === 'AltLeft' || (event.keyCode === 18 && event.location === 1)) leftAlt = false;
-    if (event.code === 'AltRight' || (event.keyCode === 18 && event.location === 2)) rightAlt = false;
+    save(`Ctrl+${event.shiftKey ? 'Shift+' : ''}${code}`);
   });
   document.getElementById(`${prefix}Confirm`)?.addEventListener('click', () => {
     if (pending !== undefined) save(pending, true);

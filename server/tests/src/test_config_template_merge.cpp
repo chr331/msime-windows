@@ -44,7 +44,7 @@ TEST_CASE(input_state_shortcut_upgrade_preserves_custom_and_disabled_bindings)
     {
         REQUIRE_EQ(added["keybindings"][definition.key].value_or(std::string()),
                    std::string(definition.defaultBinding));
-        for (const std::string binding : {"Alt+Shift+KeyG", ""})
+        for (const std::string binding : {"Ctrl+Shift+KeyG", ""})
         {
             const std::string configured = legacy + std::string(definition.key) + " = \"" + binding + "\"\n";
             const auto merged = toml::parse(MergeConfigIntoTemplate(installed, configured, legacy));

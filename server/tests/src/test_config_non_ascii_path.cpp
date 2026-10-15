@@ -104,7 +104,7 @@ TEST_CASE(config_round_trips_under_non_ascii_profile_path)
         REQUIRE(fs::exists(data_dir / L"config.toml"));
 
         REQUIRE_EQ(GetConfiguredInputStateShortcuts()[2], std::string("Ctrl+Period"));
-        for (const std::string binding : {"Ctrl+Shift+Period", "Alt+Comma", ""})
+        for (const std::string binding : {"Ctrl+Shift+Period", "Ctrl+Comma", ""})
         {
             REQUIRE(SetConfiguredInputStateShortcut(2, binding));
             InitImeConfig();
@@ -113,6 +113,8 @@ TEST_CASE(config_round_trips_under_non_ascii_profile_path)
         const auto before_invalid_hotkey = ReadText(data_dir / L"config.toml");
         REQUIRE(!SetConfiguredInputStateShortcut(2, "Ctrl+Shift+KeyF"));
         REQUIRE(!SetConfiguredInputStateShortcut(2, "Ctrl+Alt+Period"));
+        REQUIRE(!SetConfiguredInputStateShortcut(2, "Alt+KeyJ"));
+        REQUIRE(!SetConfiguredInputStateShortcut(2, "Alt+Shift+KeyJ"));
         REQUIRE_EQ(ReadText(data_dir / L"config.toml"), before_invalid_hotkey);
         REQUIRE_EQ(GetConfiguredInputStateShortcuts()[2], std::string());
         auto manual_config = before_invalid_hotkey;
@@ -130,9 +132,11 @@ TEST_CASE(config_round_trips_under_non_ascii_profile_path)
             REQUIRE(SetConfiguredInputStateShortcut(index, ""));
             InitImeConfig();
             REQUIRE_EQ(GetConfiguredInputStateShortcuts()[index], std::string());
-            REQUIRE(SetConfiguredInputStateShortcut(index, "Alt+Shift+KeyG"));
+            REQUIRE(!SetConfiguredInputStateShortcut(index, "Alt+KeyJ"));
+            REQUIRE(!SetConfiguredInputStateShortcut(index, "Alt+Shift+KeyJ"));
+            REQUIRE(SetConfiguredInputStateShortcut(index, "Ctrl+Shift+KeyG"));
             InitImeConfig();
-            REQUIRE_EQ(GetConfiguredInputStateShortcuts()[index], std::string("Alt+Shift+KeyG"));
+            REQUIRE_EQ(GetConfiguredInputStateShortcuts()[index], std::string("Ctrl+Shift+KeyG"));
             REQUIRE(SetConfiguredInputStateShortcut(index, original));
         }
         REQUIRE(!SetConfiguredInputStateShortcut(2, "Ctrl+Shift+Space"));

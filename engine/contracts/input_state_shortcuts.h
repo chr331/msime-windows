@@ -34,8 +34,7 @@ struct Rule
     std::string_view binding, label;
 };
 inline constexpr Rule Reserved[] = {
-    {"Ctrl+Shift+KeyF", "简繁切换"}, {"Ctrl+F9", "语音输入"},   {"Ctrl+Shift+F9", "语音输入"},  {"Alt+F4", "关闭窗口"},
-    {"Alt+Shift+F4", "关闭窗口"},    {"Alt+Space", "窗口菜单"}, {"Alt+Shift+Space", "窗口菜单"}};
+    {"Ctrl+Shift+KeyF", "简繁切换"}, {"Ctrl+F9", "语音输入"}, {"Ctrl+Shift+F9", "语音输入"}};
 inline constexpr Rule Warnings[] = {{"Ctrl+KeyA", "全选"},
                                     {"Ctrl+KeyC", "复制"},
                                     {"Ctrl+KeyV", "粘贴"},
@@ -84,10 +83,10 @@ struct Snapshot
         for (std::size_t i = 0; i < bindings.size(); ++i)
             FanyImeKeyChord::Parse(Definitions[i].defaultBinding, bindings[i]);
     }
-    Action Match(unsigned code, unsigned modifiers, bool rightAlt = false) const
+    Action Match(unsigned code, unsigned modifiers) const
     {
         for (std::size_t i = 0; i < bindings.size(); ++i)
-            if (bindings[i].Matches(code, modifiers, rightAlt))
+            if (bindings[i].Matches(code, modifiers))
                 return Definitions[i].action;
         return static_cast<Action>(0);
     }
