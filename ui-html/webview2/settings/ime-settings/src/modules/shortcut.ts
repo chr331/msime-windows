@@ -124,7 +124,8 @@ function setupPunctuationHotkey(): void {
       return;
     }
     const action = COMMON_APPLICATION_SHORTCUTS[binding];
-    finish(`${formatPunctuationHotkey(binding)}${action ? ` 与常用的“${action}”快捷键冲突。` : ' 将用于标点切换。'}绑定后，中英文状态下均会覆盖软件里的同名快捷键。`);
+    if (!action) return save(binding);
+    finish(`${formatPunctuationHotkey(binding)} 与常用的“${action}”快捷键冲突。仍要绑定吗？`);
     pendingBinding = binding;
     if (confirmation) confirmation.hidden = false;
   });

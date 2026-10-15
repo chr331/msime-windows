@@ -100,15 +100,13 @@ it('applies default, custom and explicitly disabled bindings without writing bac
   expect(updateConfig).not.toHaveBeenCalled();
 });
 
-it('records one new chord and waits for the persisted host snapshot', () => {
+it('saves a chord with no known conflict once and waits for the persisted host snapshot', () => {
   setupShortcut();
   editor.punctuationHotkeyButton.dispatchEvent(new Event('click'));
   key('Period', { shiftKey: true });
   key('Period', { shiftKey: true, repeat: true });
-  expect(updateConfig).not.toHaveBeenCalled();
-  expect(editor.punctuationHotkeyStatus.textContent).toContain('Ctrl + Shift + .');
-  expect(editor.punctuationHotkeyStatus.textContent).toContain('覆盖软件里的同名快捷键');
-  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(false);
+  expect(editor.punctuationHotkeyStatus.textContent).toBe('正在保存…');
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
   editor.punctuationHotkeyButton.dispatchEvent(new Event('blur'));
   confirmBinding();
   confirmBinding();
@@ -281,7 +279,7 @@ it.each([
   expect(editor.punctuationHotkeyButton.textContent).toBe('Ctrl + .');
   expect(editor.punctuationHotkeyStatus.textContent).toContain(action);
   expect(editor.punctuationHotkeyStatus.textContent).toContain('冲突');
-  expect(editor.punctuationHotkeyStatus.textContent).toContain('中英文状态');
+  expect(editor.punctuationHotkeyStatus.textContent).toContain('仍要绑定吗？');
   expect(editor.punctuationHotkeyConfirmation.hidden).toBe(false);
   confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation',
@@ -312,7 +310,7 @@ it('replaces a pending chord when recording starts again', () => {
   confirmBinding();
   expect(updateConfig).not.toHaveBeenCalled();
   key('KeyG', { shiftKey: true });
-  expect(editor.punctuationHotkeyStatus.textContent).toContain('Ctrl + Shift + G');
+  expect(editor.punctuationHotkeyConfirmation.hidden).toBe(true);
   confirmBinding();
   expect(updateConfig).toHaveBeenCalledExactlyOnceWith('keybindings.toggle_punctuation', 'Ctrl+Shift+KeyG');
 });

@@ -60,10 +60,6 @@
   font-size: 12px;
 }
 
-.punctuation-hotkey-description {
-  margin: 0 22px 18px;
-}
-
 .punctuation-hotkey-actions {
   display: flex;
   flex-wrap: wrap;
