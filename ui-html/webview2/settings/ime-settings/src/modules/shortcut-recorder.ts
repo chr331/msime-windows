@@ -70,7 +70,7 @@ function createEditor(key: string, prefix: string): Editor | undefined {
     }
     const warning = metadata?.warnings.find(rule => rule.binding === binding)?.label;
     if (warning && !confirmed) {
-      finish(`${format(binding)} 与常用的“${warning}”快捷键冲突。仍要绑定吗？`);
+      finish(`${format(binding)} 与常用的“${warning}”快捷键冲突，绑定后会覆盖当前软件的这项操作。仍要绑定吗？`);
       pending = binding;
       active = editor;
       if (confirmation) confirmation.hidden = false;
