@@ -397,6 +397,38 @@ static nlohmann::json CustomShuangpinSchemasJson()
     return schemas;
 }
 
+nlohmann::json BuildInputStateShortcutMetadata()
+{
+    using namespace FanyImeInputStateShortcuts;
+    const auto &configured = GetConfiguredInputStateShortcuts();
+    Values values;
+    for (std::size_t i = 0; i < values.size(); ++i)
+        values[i] = configured[i];
+    nlohmann::json actions = nlohmann::json::array(), reserved = nlohmann::json::array(),
+                   warnings = nlohmann::json::array(), keys = nlohmann::json::array();
+    for (std::size_t i = 0; i < Definitions.size(); ++i)
+    {
+        const auto &d = Definitions[i];
+        actions.push_back(nlohmann::json{{"key", std::string(d.key)},
+                                         {"label", std::string(d.label)},
+                                         {"editor", std::string(d.editor)},
+                                         {"defaultBinding", std::string(d.defaultBinding)},
+                                         {"binding", configured[i]},
+                                         {"problem", std::string(Validate(i, values[i], values))}});
+    }
+    for (const auto &rule : Reserved)
+        reserved.push_back(nlohmann::json{{"binding", std::string(rule.binding)}, {"label", std::string(rule.label)}});
+    for (const auto &rule : Warnings)
+        warnings.push_back(nlohmann::json{{"binding", std::string(rule.binding)}, {"label", std::string(rule.label)}});
+    for (const auto &key : FanyImeKeyChord::NamedKeys)
+        keys.push_back(
+            nlohmann::json{{"code", std::string(key.name)}, {"vk", key.key}, {"label", std::string(key.label)}});
+    return {{"actions", std::move(actions)},
+            {"reserved", std::move(reserved)},
+            {"warnings", std::move(warnings)},
+            {"keys", std::move(keys)}};
+}
+
 std::wstring BuildConfigMessage(bool refresh_skin_catalog)
 {
 
@@ -588,7 +620,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"switch_language_ctrl", GetConfiguredSwitchLanguageCtrlEnabled()},
             {"switch_language_ctrl_alt_space", GetConfiguredSwitchLanguageCtrlAltSpaceEnabled()},
             {"toggle_character_set_ctrl_shift_f", GetConfiguredCharacterSetShortcutEnabled()},
-            {"toggle_punctuation", GetConfiguredPunctuationHotkey()},
+            {"input_state_shortcuts", BuildInputStateShortcutMetadata()},
             {"trilingual_cycle", GetConfiguredTrilingualCycleEnabled()}}},
           {"frequency_adjustment",
            {{"mode", frequency.mode},
@@ -1058,9 +1090,10 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCharacterSetShortcutEnabled(json::value_to<bool>(data.at("value")));
     if (path == "keybindings.trilingual_cycle")
         return SetConfiguredTrilingualCycleEnabled(json::value_to<bool>(data.at("value")));
-    if (path == "keybindings.toggle_punctuation")
-        return data.at("value").is_string() &&
-               SetConfiguredPunctuationHotkey(json::value_to<std::string>(data.at("value")));
+    for (std::size_t i = 0; i < FanyImeInputStateShortcuts::Definitions.size(); ++i)
+        if (path == "keybindings." + std::string(FanyImeInputStateShortcuts::Definitions[i].key))
+            return data.at("value").is_string() &&
+                   SetConfiguredInputStateShortcut(i, json::value_to<std::string>(data.at("value")));
     if (path.rfind("frequency_adjustment.", 0) == 0)
     {
         const std::string key = path.substr(21);
@@ -1540,7 +1573,7 @@ void HandleWebMessage(HWND hwnd, ICoreWebView2WebMessageReceivedEventArgs *args)
             g_worker->Submit([data] {
                 const bool saved = ApplyConfigUpdate(data);
                 // This editor waits for persisted state even for a failed/no-op write.
-                const bool force_snapshot = data.at("path").as_string() == "keybindings.toggle_punctuation";
+                const bool force_snapshot = data.at("path").as_string().find("keybindings.") == 0;
                 auto completion = ConfigCompletion(false, force_snapshot);
                 return [saved, completion = std::move(completion)] {
                     completion();

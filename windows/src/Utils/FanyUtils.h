@@ -1,7 +1,7 @@
 #pragma once
 #include <Windows.h>
 #include <string>
-#include "../../../engine/contracts/punctuation_hotkey.h"
+#include "../../../engine/contracts/input_state_shortcuts.h"
 
 namespace FanyUtils
 {
@@ -29,7 +29,7 @@ struct SwitchLanguageHotkeys
     bool ctrl = false;
     bool ctrl_alt_space = true;
     bool character_set_ctrl_shift_f = true;
-    FanyImePunctuationHotkey::Binding punctuation = FanyImePunctuationHotkey::DefaultBinding;
+    FanyImeInputStateShortcuts::Snapshot input_state;
 };
 // Read keybindings.switch_language_* from shared config.toml.
 SwitchLanguageHotkeys ReadConfiguredSwitchLanguageHotkeys();

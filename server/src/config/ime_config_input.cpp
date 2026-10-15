@@ -8,7 +8,7 @@
 #include "defines/defines.h"
 #include "engine/common/helpcode_utils.h"
 #include "engine/contracts/direct_helpcode.h"
-#include "engine/contracts/punctuation_hotkey.h"
+#include "engine/contracts/input_state_shortcuts.h"
 #include "engine/core/data_path.h"
 #include "engine/shuangpin/shuangpin_profile.h"
 
@@ -178,18 +178,23 @@ bool SetConfiguredSwitchLanguageCtrlAltSpaceEnabled(bool enabled)
     return true;
 }
 
-const std::string &GetConfiguredPunctuationHotkey()
+const InputStateShortcutValues &GetConfiguredInputStateShortcuts()
 {
-    return g_punctuation_hotkey;
+    return g_input_state_shortcuts;
 }
 
-bool SetConfiguredPunctuationHotkey(const std::string &binding)
+bool SetConfiguredInputStateShortcut(std::size_t index, const std::string &binding)
 {
-    FanyImePunctuationHotkey::Binding parsed;
-    if (!FanyImePunctuationHotkey::Parse(binding, parsed) ||
-        !WriteConfiguredValue("keybindings", "toggle_punctuation", EscapeTomlBasicString(binding)))
+    using namespace FanyImeInputStateShortcuts;
+    if (index >= Definitions.size())
         return false;
-    g_punctuation_hotkey = binding;
+    Values values;
+    for (std::size_t i = 0; i < values.size(); ++i)
+        values[i] = g_input_state_shortcuts[i];
+    if (!Validate(index, binding, values).empty() ||
+        !WriteConfiguredValue("keybindings", std::string(Definitions[index].key), EscapeTomlBasicString(binding)))
+        return false;
+    g_input_state_shortcuts[index] = binding;
     return true;
 }
 

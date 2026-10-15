@@ -3,6 +3,7 @@
 #include "engine/core/fuzzy_pinyin_options.h"
 #include "engine/core/scheme_type.h"
 #include "engine/shuangpin/shuangpin_profile.h"
+#include "engine/contracts/input_state_shortcuts.h"
 #include <toml++/toml.h>
 #include <filesystem>
 #include <map>
@@ -255,8 +256,9 @@ bool GetConfiguredSwitchLanguageCtrlEnabled();
 bool SetConfiguredSwitchLanguageCtrlEnabled(bool enabled);
 bool GetConfiguredSwitchLanguageCtrlAltSpaceEnabled();
 bool SetConfiguredSwitchLanguageCtrlAltSpaceEnabled(bool enabled);
-const std::string &GetConfiguredPunctuationHotkey();
-bool SetConfiguredPunctuationHotkey(const std::string &binding);
+using InputStateShortcutValues = std::array<std::string, FanyImeInputStateShortcuts::Definitions.size()>;
+const InputStateShortcutValues &GetConfiguredInputStateShortcuts();
+bool SetConfiguredInputStateShortcut(std::size_t index, const std::string &binding);
 const std::string &GetConfiguredShuangpinSchema();
 // 当前双拼方案是否把 ing 放在分号键上（微软、搜狗、紫光），此时分号在音节第二位是输入键。
 bool IsConfiguredShuangpinSemicolonFinal();

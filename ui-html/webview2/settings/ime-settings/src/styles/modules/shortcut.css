@@ -54,13 +54,13 @@
   border-top: 1px solid var(--border-color);
 }
 
-.punctuation-hotkey-editor {
+.shortcut-editor {
   min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
 }
 
-.punctuation-hotkey-actions {
+.shortcut-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -70,7 +70,7 @@
   display: none;
 }
 
-.punctuation-hotkey-actions button {
+.shortcut-actions button {
   padding: 6px 10px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -80,7 +80,7 @@
   cursor: pointer;
 }
 
-.punctuation-hotkey-actions button:focus-visible {
+.shortcut-actions button:focus-visible {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
 }

@@ -120,6 +120,8 @@ constexpr std::uint32_t HideCaretState = 16; // focus-context boundary; never cl
 constexpr std::uint32_t IMESwitch = 7;
 constexpr std::uint32_t PuncSwitch = 8;
 constexpr std::uint32_t DoubleSingleByteSwitch = 9;
+// Main, negotiated InputStateShortcuts: keycode is the stable input-state Action ID.
+constexpr std::uint32_t InputStateAction = 17;
 constexpr bool IsRouteDeactivation(std::uint32_t event_type)
 {
     return event_type == ClientDeactivated || event_type == ClientSuspended;

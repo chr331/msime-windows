@@ -246,8 +246,13 @@ UINT CaptureIpcModifiers()
 
 bool IsEnglishInputModeToggle(UINT code, UINT modifiers)
 {
-    // Ctrl+Shift+E, without Alt.
-    return code == 'E' && (modifiers & 0b00000111u) == 0b00000011u;
+    if (!SupportsInputStateShortcuts())
+        return false;
+    if ((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
+        modifiers |= FanyImeKeyChord::Win;
+    return FanyUtils::ReadConfiguredSwitchLanguageHotkeys().input_state.Match(
+               code, modifiers, (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ==
+           FanyImeInputStateShortcuts::Action::EnglishCandidates;
 }
 
 // Ctrl+Enter, without Shift/Alt/Windows: commit the translation shown to the right of the
@@ -475,12 +480,12 @@ BOOL CMetasequoiaIME::_IsKeyEaten(         //
         }
         // Keep the Chinese compartment open: this only toggles the
         // Server-owned English candidate sub-mode.
-        if (IsEnglishInputModeToggle(*pCodeOut, shortcutModifiers))
+        if (!_serverUnavailableFallbackActive && IsEnglishInputModeToggle(*pCodeOut, shortcutModifiers))
         {
             if (pKeyState)
             {
                 pKeyState->Category = CATEGORY_COMPOSING;
-                pKeyState->Function = FUNCTION_CANCEL;
+                pKeyState->Function = FUNCTION_TOGGLE_ENGLISH_CANDIDATES;
             }
             return TRUE;
         }
@@ -1318,6 +1323,11 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
             return KeyDownDispatchResult::Complete;
         }
 
+        if (KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES && !SupportsInputStateShortcuts())
+        {
+            _ResetSessionAfterFailure(DeferredKeyFailureKind::Resync);
+            return KeyDownDispatchResult::Complete;
+        }
         Global::Keycode = code;
         Global::wch = wch;
         Global::ModifiersDown = capturedModifiers;
@@ -1359,7 +1369,12 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
                                 L"", KeyEventPayloadWriteMask(includeCaretAnchor));
 
         PerfTimer sendKeyEventTimer;
-        const KeyEventSendResult sendResult = SendKeyEventToUIProcess(&requestId);
+        const KeyEventSendResult sendResult = SendKeyEventToUIProcess(
+            &requestId, KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES
+                            ? static_cast<unsigned>(FanyImeInputStateShortcuts::Action::EnglishCandidates)
+                            : 0);
+        if (KeystrokeState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES)
+            KeystrokeState.Function = FUNCTION_CANCEL;
         if (KeystrokeState.Function == FUNCTION_TOGGLE_CHARACTER_SET)
         {
             // No document edit or response is needed. In particular, an ambiguous

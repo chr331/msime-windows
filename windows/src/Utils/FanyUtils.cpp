@@ -396,6 +396,8 @@ namespace
 SwitchLanguageHotkeys ParseSwitchLanguageHotkeys(const std::filesystem::path &configPath)
 {
     SwitchLanguageHotkeys result;
+    std::array<std::string, FanyImeInputStateShortcuts::Definitions.size()> shortcutValues;
+    auto values = FanyImeInputStateShortcuts::Defaults();
     std::ifstream input(configPath);
     if (!input)
     {
@@ -454,10 +456,6 @@ SwitchLanguageHotkeys ParseSwitchLanguageHotkeys(const std::filesystem::path &co
         {
             result.character_set_ctrl_shift_f = ParseTomlBool(raw, true);
         }
-        else if (key == "toggle_punctuation")
-        {
-            result.punctuation = FanyImePunctuationHotkey::FromTomlValue(raw);
-        }
         else if (key == "switch_language" && !sawShift && !sawCtrlAltSpace)
         {
             // Legacy array: switch_language = ["Ctrl+Space", "Shift"]
@@ -465,7 +463,14 @@ SwitchLanguageHotkeys ParseSwitchLanguageHotkeys(const std::filesystem::path &co
             result.ctrl_alt_space =
                 raw.find("Ctrl+Alt+Space") != std::string::npos || raw.find("Ctrl+Space") != std::string::npos;
         }
+        for (std::size_t i = 0; i < values.size(); ++i)
+            if (key == FanyImeInputStateShortcuts::Definitions[i].key)
+            {
+                shortcutValues[i] = FanyImeKeyChord::TomlString(raw);
+                values[i] = shortcutValues[i];
+            }
     }
+    result.input_state = FanyImeInputStateShortcuts::Resolve(values);
     (void)sawCtrl;
     return result;
 }

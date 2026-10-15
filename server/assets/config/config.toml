@@ -402,7 +402,9 @@ autocorrect_marker = true
 switch_language_shift = true
 switch_language_ctrl = false
 switch_language_ctrl_alt_space = true
-# 中文/英文标点切换；空字符串表示未绑定；Alt 表示左 Alt，右 Alt 保留给语音输入和 AltGr
+# 输入状态切换；空字符串表示未绑定；Alt 表示左 Alt，右 Alt 保留给语音输入和 AltGr
+toggle_english_candidates = "Ctrl+Shift+KeyE"
+toggle_full_width = "Ctrl+Shift+Space"
 toggle_punctuation = "Ctrl+Period"
 # Only active in Chinese mode.
 toggle_character_set_ctrl_shift_f = true

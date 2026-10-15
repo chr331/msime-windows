@@ -33,20 +33,24 @@ TEST_CASE(shortcut_config_upgrade_preserves_word_selection_and_adds_defaults)
     REQUIRE(merged.find("toggle_character_set_ctrl_shift_f = true") != std::string::npos);
 }
 
-TEST_CASE(punctuation_hotkey_upgrade_preserves_custom_and_disabled_bindings)
+TEST_CASE(input_state_shortcut_upgrade_preserves_custom_and_disabled_bindings)
 {
     std::ifstream input(MSIME_DEFAULT_CONFIG_PATH, std::ios::binary);
     REQUIRE(static_cast<bool>(input));
     const std::string installed((std::istreambuf_iterator<char>(input)), {});
     const std::string legacy = "[keybindings]\nswitch_language_shift = true\n";
     const auto added = toml::parse(MergeConfigIntoTemplate(installed, legacy, legacy));
-    REQUIRE_EQ(added["keybindings"]["toggle_punctuation"].value_or(std::string()), std::string("Ctrl+Period"));
-    for (const std::string binding : {"Ctrl+Shift+Period", ""})
+    for (const auto &definition : FanyImeInputStateShortcuts::Definitions)
     {
-        const std::string configured = legacy + "toggle_punctuation = \"" + binding + "\"\n";
-        const auto merged = toml::parse(MergeConfigIntoTemplate(installed, configured, legacy));
-        REQUIRE_EQ(merged["keybindings"]["toggle_punctuation"].value_or(std::string("missing")), binding);
-        REQUIRE(merged["keybindings"]["switch_language_shift"].value_or(false));
+        REQUIRE_EQ(added["keybindings"][definition.key].value_or(std::string()),
+                   std::string(definition.defaultBinding));
+        for (const std::string binding : {"Alt+Shift+KeyG", ""})
+        {
+            const std::string configured = legacy + std::string(definition.key) + " = \"" + binding + "\"\n";
+            const auto merged = toml::parse(MergeConfigIntoTemplate(installed, configured, legacy));
+            REQUIRE_EQ(merged["keybindings"][definition.key].value_or(std::string("missing")), binding);
+            REQUIRE(merged["keybindings"]["switch_language_shift"].value_or(false));
+        }
     }
 }
 

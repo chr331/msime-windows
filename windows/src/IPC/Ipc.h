@@ -50,6 +50,7 @@ bool SupportsCharacterSetShortcut();
 bool SupportsCompositionRestore();
 bool SupportsCaretStateIndicator();
 bool SupportsTrilingualCycle();
+bool SupportsInputStateShortcuts();
 bool FlushNamedpipeFocusSessionReset();
 bool FlushNamedpipeImeDeactivation(uint64_t focusToken = 0);
 
@@ -65,7 +66,7 @@ int WriteDataToSharedMemory(           //
     const std::wstring &pinyin_string, //
     UINT write_flag                    //
 );
-KeyEventSendResult SendKeyEventToUIProcess(_Out_opt_ uint64_t *requestId = nullptr);
+KeyEventSendResult SendKeyEventToUIProcess(_Out_opt_ uint64_t *requestId = nullptr, unsigned inputStateAction = 0);
 void DebugTsfKeyLatency(_In_z_ const wchar_t *stage, uint64_t requestId, double elapsedMs, HRESULT result);
 void DebugTsfIssue47(_In_z_ const wchar_t *stage, uint64_t requestId, UINT code, WCHAR wch, UINT category,
                      UINT function, int eaten, BOOL composing, size_t virtualKeyLength, HRESULT result,
@@ -105,7 +106,8 @@ int WriteDataToNamedPipe(              //
     const std::wstring &pinyin_string, //
     UINT write_flag                    //
 );
-KeyEventSendResult SendKeyEventToUIProcessViaNamedPipe(_Out_opt_ uint64_t *requestId = nullptr);
+KeyEventSendResult SendKeyEventToUIProcessViaNamedPipe(_Out_opt_ uint64_t *requestId = nullptr,
+                                                       unsigned inputStateAction = 0);
 int SendHideCandidateWndEventToUIProcessViaNamedPipe();
 int SendHideCaretStateEventToUIProcessViaNamedPipe();
 int SendShowCandidateWndEventToUIProcessViaNamedPipe();

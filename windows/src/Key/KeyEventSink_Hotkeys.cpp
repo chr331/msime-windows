@@ -305,16 +305,16 @@ bool CMetasequoiaIME::_MatchChordInputHotkey(WPARAM wParam, _Out_ GUID *hotkeyGu
         *hotkeyGuid = Global::MetasequoiaIMEGuidImeModePreserveKey02;
         return true;
     }
-    if (code == VK_SPACE && ctrl && shift && !alt)
+    const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 || (GetKeyState(VK_RWIN) & 0x8000) != 0;
+    const unsigned modifiers = (shift ? FanyImeKeyChord::Shift : 0) | (ctrl ? FanyImeKeyChord::Control : 0) |
+                               (alt ? FanyImeKeyChord::Alt : 0) | (win ? FanyImeKeyChord::Win : 0);
+    const auto action = hotkeys.input_state.Match(code, modifiers, (GetKeyState(VK_RMENU) & 0x8000) != 0);
+    if (action == FanyImeInputStateShortcuts::Action::FullWidth)
     {
         *hotkeyGuid = Global::MetasequoiaIMEGuidDoubleSingleBytePreserveKey;
         return true;
     }
-    const bool win = (GetKeyState(VK_LWIN) & 0x8000) != 0 || (GetKeyState(VK_RWIN) & 0x8000) != 0;
-    const unsigned modifiers = (shift ? FanyImePunctuationHotkey::Shift : 0) |
-                               (ctrl ? FanyImePunctuationHotkey::Control : 0) |
-                               (alt ? FanyImePunctuationHotkey::Alt : 0) | (win ? FanyImePunctuationHotkey::Win : 0);
-    if (hotkeys.punctuation.Matches(code, modifiers, (GetKeyState(VK_RMENU) & 0x8000) != 0))
+    if (action == FanyImeInputStateShortcuts::Action::Punctuation)
     {
         *hotkeyGuid = Global::MetasequoiaIMEGuidPunctuationPreserveKey;
         return true;

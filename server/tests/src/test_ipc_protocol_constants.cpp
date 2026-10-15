@@ -3,6 +3,7 @@
 #endif
 #include "ipc/ipc.h"
 #include "ipc/input_key_policy.h"
+#include "engine/contracts/ipc_negotiation.h"
 #include "statistics/stats_pipe.h"
 #include "tests/includes/test_framework.h"
 
@@ -126,6 +127,8 @@ TEST_CASE(ipc_pipe_ready_is_a_distinct_server_reply)
 
 TEST_CASE(ipc_client_suspension_is_a_distinct_nonterminal_route_reset)
 {
+    REQUIRE_EQ(FanyImePipeEventType::InputStateAction, 17u);
+    REQUIRE_EQ(FanyImeProtocol::InputStateShortcuts, 1u << 7);
     REQUIRE_EQ(FanyImePipeEventType::ClientActivated, 11u);
     REQUIRE_EQ(FanyImePipeEventType::ClientDeactivated, 12u);
     REQUIRE_EQ(FanyImePipeEventType::StatusSnapshot, 13u);

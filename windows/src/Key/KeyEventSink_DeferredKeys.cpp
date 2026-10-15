@@ -165,6 +165,7 @@ void ApplyDeferredKeyState(DeferredShadowState &shadow, const _KEYSTROKE_STATE &
         clearComposition();
         break;
     }
+    case FUNCTION_TOGGLE_ENGLISH_CANDIDATES:
     case FUNCTION_CANCEL:
         clearComposition();
         break;
@@ -433,10 +434,11 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
         keyState->Function = FUNCTION_TOGGLE_CHARACTER_SET;
         return true;
     }
-    if (projectedImeOpen && IsEnglishInputModeToggle(*classifiedCode, capturedModifiers))
+    if (projectedImeOpen && !_serverUnavailableFallbackActive && !_IsKeyboardDisabled() &&
+        IsEnglishInputModeToggle(*classifiedCode, capturedModifiers))
     {
         keyState->Category = CATEGORY_COMPOSING;
-        keyState->Function = FUNCTION_CANCEL;
+        keyState->Function = FUNCTION_TOGGLE_ENGLISH_CANDIDATES;
         return true;
     }
 
@@ -716,7 +718,9 @@ bool CMetasequoiaIME::_QueueDeferredKeyDown(_In_ ITfContext *pContext, WPARAM wP
                                             bool scheduleDrain)
 {
     // Repeats are owned but do not enqueue another global configuration toggle.
-    if (keyState.Function == FUNCTION_TOGGLE_CHARACTER_SET && (lParam & 0x40000000) != 0)
+    if ((keyState.Function == FUNCTION_TOGGLE_CHARACTER_SET ||
+         keyState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES) &&
+        (lParam & 0x40000000) != 0)
         return true;
     if (pContext == nullptr || !_DeferredKeyQueueHasCapacity())
     {
@@ -1090,7 +1094,8 @@ void CMetasequoiaIME::_DrainOneDeferredKeyDown()
     if (_serverUnavailableFallbackActive)
     {
         _KEYSTROKE_STATE offlineState = key.keyState;
-        if (offlineState.Function == FUNCTION_CYCLE_INPUT_MODE)
+        if (offlineState.Function == FUNCTION_CYCLE_INPUT_MODE ||
+            offlineState.Function == FUNCTION_TOGGLE_ENGLISH_CANDIDATES)
         {
             // Its tail was classified for the projected destination. The
             // cycle cannot run offline, so discard that tail through the

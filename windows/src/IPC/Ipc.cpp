@@ -495,7 +495,7 @@ bool WritePipeHello(HANDLE hPipeHandle, UINT pipeRole)
             FanyImeProtocol::Hello(GetPipeClientId(), NextProtocolId(nextRequestId),
                                    FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
                                        FanyImeProtocol::CompositionRestore | FanyImeProtocol::CaretStateIndicator |
-                                       FanyImeProtocol::TrilingualCycle);
+                                       FanyImeProtocol::TrilingualCycle | FanyImeProtocol::InputStateShortcuts);
         BOOL ret = WriteFile(hPipeHandle, &hello, sizeof(hello), &bytesWritten, NULL);
         // Never authorize keys from merely writing a hello. An old Server
         // without negotiation times out into the existing raw-input fallback.
@@ -971,6 +971,12 @@ bool SupportsTrilingualCycle()
            (negotiatedServerCapabilities & FanyImeProtocol::TrilingualCycle) != 0;
 }
 
+bool SupportsInputStateShortcuts()
+{
+    return hPipe && hPipe != INVALID_HANDLE_VALUE &&
+           (negotiatedServerCapabilities & FanyImeProtocol::InputStateShortcuts) != 0;
+}
+
 HANDLE GetToTsfWorkerThreadNamedpipe()
 {
     return hToTsfWorkerThreadPipe;
@@ -1054,9 +1060,9 @@ int WriteDataToNamedPipe(              //
     return 0;
 }
 
-KeyEventSendResult SendKeyEventToUIProcess(uint64_t *requestId)
+KeyEventSendResult SendKeyEventToUIProcess(uint64_t *requestId, unsigned inputStateAction)
 {
-    return SendKeyEventToUIProcessViaNamedPipe(requestId);
+    return SendKeyEventToUIProcessViaNamedPipe(requestId, inputStateAction);
 }
 
 void DebugTsfKeyLatency(const wchar_t *stage, uint64_t requestId, double elapsedMs, HRESULT result)
@@ -1246,14 +1252,16 @@ bool SendToNamedpipe(bool *deliveryAmbiguous = nullptr)
 
     // Tell Server never to raise an IME HWND for UILess hosts (games / fullscreen).
     if (Global::IsUiLessMode() && (packet.event_type == FanyImePipeEventType::KeyEvent ||
+                                   packet.event_type == FanyImePipeEventType::InputStateAction ||
                                    packet.event_type == FanyImePipeEventType::ShowCandidateWnd ||
                                    packet.event_type == FanyImePipeEventType::MoveCandidateWnd ||
                                    packet.event_type == FanyImePipeEventType::HideCandidateWnd))
     {
         packet.modifiers_down |= FanyImePipeFlags::UiLess;
     }
-    if (packet.event_type == FanyImePipeEventType::KeyEvent && Global::SensitiveInputField &&
-        Global::AiContextUploadEnabled.load(std::memory_order_relaxed))
+    if ((packet.event_type == FanyImePipeEventType::KeyEvent ||
+         packet.event_type == FanyImePipeEventType::InputStateAction) &&
+        Global::SensitiveInputField && Global::AiContextUploadEnabled.load(std::memory_order_relaxed))
     {
         packet.modifiers_down |= FanyImePipeFlags::SensitiveField;
     }
@@ -1563,7 +1571,7 @@ bool SendToAuxNamedpipe(const std::wstring &pipeData, bool waitForAcknowledgemen
  *   2: FanyShowCandidateWndEvent
  *   3: FanyMoveCandidateWndEvent
  */
-KeyEventSendResult SendKeyEventToUIProcessViaNamedPipe(uint64_t *requestId)
+KeyEventSendResult SendKeyEventToUIProcessViaNamedPipe(uint64_t *requestId, unsigned inputStateAction)
 {
     if (requestId)
     {
@@ -1594,7 +1602,10 @@ KeyEventSendResult SendKeyEventToUIProcessViaNamedPipe(uint64_t *requestId)
     const uint64_t newRequestId = NextProtocolId(nextRequestId);
     namedpipeData = keyPacket;
     namedpipeData.request_id = newRequestId;
-    namedpipeData.event_type = FanyImePipeEventType::KeyEvent;
+    namedpipeData.event_type =
+        inputStateAction ? FanyImePipeEventType::InputStateAction : FanyImePipeEventType::KeyEvent;
+    if (inputStateAction)
+        namedpipeData.keycode = inputStateAction;
     bool deliveryAmbiguous = false;
     if (!SendToNamedpipe(&deliveryAmbiguous))
     {

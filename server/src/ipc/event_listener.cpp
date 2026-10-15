@@ -106,6 +106,7 @@ void ApplyUiLessFromPacket(const FanyImeNamedpipeData &pipe_data)
         g_session_uiless = false;
     }
     else if (pipe_data.event_type == FanyImePipeEventType::KeyEvent ||
+             pipe_data.event_type == FanyImePipeEventType::InputStateAction ||
              pipe_data.event_type == FanyImePipeEventType::ShowCandidateWnd ||
              pipe_data.event_type == FanyImePipeEventType::MoveCandidateWnd ||
              pipe_data.event_type == FanyImePipeEventType::HideCandidateWnd)
