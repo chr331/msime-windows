@@ -13,10 +13,12 @@
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "config/ime_config.h"
@@ -34,6 +36,11 @@
 namespace
 {
 using std::chrono::milliseconds;
+
+// Only the control thread's config read may take a test gate. Hook calls and
+// RefreshKeyboardHook run on this thread and must keep working while the
+// control thread is parked.
+std::thread::id g_test_thread_id;
 
 std::mutex g_effect_mutex;
 std::condition_variable g_effect_cv;
@@ -78,17 +85,122 @@ template <typename Predicate> bool WaitFor(Predicate predicate, milliseconds tim
     return predicate();
 }
 
+constexpr wchar_t kFixedAsrText[] = L"asr-fixed-result";
+
+std::mutex g_commit_mutex;
+std::wstring g_inserted_text;
+std::atomic<int> g_insert_text_count{0};
+
+void ResetCommit()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_commit_mutex);
+        g_inserted_text.clear();
+    }
+    g_insert_text_count = 0;
+}
+
+int InsertTextCount()
+{
+    return g_insert_text_count.load();
+}
+
+std::wstring InsertedText()
+{
+    std::lock_guard<std::mutex> lock(g_commit_mutex);
+    return g_inserted_text;
+}
+
+bool WaitForInsertText()
+{
+    return WaitFor([] { return g_insert_text_count.load() > 0; }, milliseconds(3000));
+}
+
+std::mutex g_doubao_mutex;
+std::condition_variable g_doubao_cv;
+bool g_doubao_finish_entered = false;
+bool g_doubao_finish_release = false;
+
+void ResetDoubao()
+{
+    std::lock_guard<std::mutex> lock(g_doubao_mutex);
+    g_doubao_finish_entered = false;
+    g_doubao_finish_release = false;
+}
+
+bool DoubaoFinishEntered()
+{
+    std::lock_guard<std::mutex> lock(g_doubao_mutex);
+    return g_doubao_finish_entered;
+}
+
+bool WaitDoubaoFinishEntered()
+{
+    return WaitFor([] {
+        std::lock_guard<std::mutex> lock(g_doubao_mutex);
+        return g_doubao_finish_entered;
+    });
+}
+
+void ReleaseDoubaoFinish()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_doubao_mutex);
+        g_doubao_finish_release = true;
+    }
+    g_doubao_cv.notify_all();
+    NotifyEffects();
+}
+
+std::mutex g_overlay_mutex;
+std::function<void(WaveOverlay::Action)> g_overlay_action_handler;
+
+bool InvokeOverlayCancel()
+{
+    std::function<void(WaveOverlay::Action)> handler;
+    {
+        std::lock_guard<std::mutex> lock(g_overlay_mutex);
+        handler = g_overlay_action_handler;
+    }
+    if (!handler)
+        return false;
+    handler(WaveOverlay::Action::Cancel);
+    return true;
+}
+
 std::mutex g_capture_mutex;
 std::condition_variable g_capture_cv;
 bool g_capture_entered = false;
 bool g_capture_release = false;
 int g_capture_stop_count = 0;
+metasequoia::voice::AudioCapture::AudioCallback g_audio_callback;
 
 void ResetCapture()
 {
     std::lock_guard<std::mutex> lock(g_capture_mutex);
     g_capture_entered = false;
     g_capture_release = false;
+    g_audio_callback = {};
+}
+
+bool CaptureEntered()
+{
+    std::lock_guard<std::mutex> lock(g_capture_mutex);
+    return g_capture_entered;
+}
+
+bool InjectAudioFrames(std::size_t frames)
+{
+    metasequoia::voice::AudioCapture::AudioCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(g_capture_mutex);
+        callback = g_audio_callback;
+    }
+    if (!callback)
+        return false;
+    const std::vector<float> samples(frames, 0.2f);
+    callback(samples.data(), samples.size());
+    return true;
 }
 
 bool WaitCaptureEntered()
@@ -121,6 +233,7 @@ VoiceInputConfig g_config;
 bool g_block_next_config_read = false;
 bool g_config_read_entered = false;
 bool g_config_read_release = false;
+bool g_config_read_waiting = false;
 std::atomic<int> g_config_read_count{0};
 
 void SetConfig(const VoiceInputConfig &config)
@@ -131,16 +244,22 @@ void SetConfig(const VoiceInputConfig &config)
 
 void BlockNextConfigRead()
 {
-    std::lock_guard<std::mutex> lock(g_config_mutex);
+    std::unique_lock<std::mutex> lock(g_config_mutex);
+    // ReleaseConfigRead only notifies; the old waiter may not have reacquired
+    // the mutex yet. Wait for it to leave its gate before resetting release,
+    // otherwise the old read would be trapped by the new gate. The bound turns
+    // a missed release into a test failure instead of a harness hang.
+    const bool exited = g_config_cv.wait_for(lock, milliseconds(5000), [] { return !g_config_read_waiting; });
+    REQUIRE(exited);
     g_block_next_config_read = true;
     g_config_read_entered = false;
     g_config_read_release = false;
 }
 
-bool WaitConfigReadEntered()
+bool WaitConfigReadEntered(milliseconds timeout = milliseconds(5000))
 {
     std::unique_lock<std::mutex> lock(g_config_mutex);
-    return g_config_cv.wait_for(lock, milliseconds(5000), [] { return g_config_read_entered; });
+    return g_config_cv.wait_for(lock, timeout, [] { return g_config_read_entered; });
 }
 
 void ReleaseConfigRead()
@@ -169,6 +288,22 @@ VoiceInputConfig TestConfig(bool enabled, bool hotkeys)
     config.start_sound = false;
     config.end_sound = false;
     config.mute_system_audio = false;
+    config.polish_text = false;
+    return config;
+}
+
+// Streaming Doubao is the only provider whose recognition runs through Finish,
+// which is what lets a test park the ASR phase. The fake client never opens a
+// network connection. TSF commit mode keeps the commit on the fake IPC path
+// instead of SendInput or the clipboard; Polish stays off.
+VoiceInputConfig TestDoubaoConfig(bool enabled, bool hotkeys)
+{
+    VoiceInputConfig config = TestConfig(enabled, hotkeys);
+    config.asr_provider = "doubao";
+    config.asr_token = "doubao-test-token";
+    config.asr_tokens["doubao"] = "doubao-test-token";
+    config.asr_endpoint = "wss://voice.invalid.test/never";
+    config.commit_mode = "tsf";
     config.polish_text = false;
     return config;
 }
@@ -278,13 +413,103 @@ void ReleaseTestKeys()
     KeyUp(VK_F9);
 }
 
+// A Start sent while no recording exists parks in the disabled config read.
+// Reaching that read proves the control thread crossed every earlier command,
+// including the action whose effect the test is about.
+bool QueueDisabledStartBarrier()
+{
+    SetConfig(TestConfig(false, true));
+    BlockNextConfigRead();
+    VoiceInput::StartRecording();
+    return WaitConfigReadEntered(milliseconds(2000));
+}
+
+// Toggle reaches the config read whether the control thread is idle (Start) or
+// a build without the startup marker has already committed a recording (Stop),
+// so the config-gate tests can report the capture flag instead of hanging on
+// the capture gate. Releasing the capture gate only runs after the barrier
+// times out, which is already a failure.
+bool QueueToggleBarrierAllowingBrokenCapture()
+{
+    SetConfig(TestConfig(false, true));
+    BlockNextConfigRead();
+    VoiceInput::ToggleRecording();
+    bool reached = WaitConfigReadEntered(milliseconds(2000));
+    if (!reached)
+    {
+        AllowCaptureStart();
+        reached = WaitConfigReadEntered();
+    }
+    return reached;
+}
+
+void VerifyNextHoldStartsAndStops()
+{
+    SetConfig(TestConfig(true, true));
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+    const int stop_before = CaptureStopCount();
+    const int hides_before = g_hide_count.load();
+    EndGesture(Gesture::RAlt);
+    REQUIRE(WaitNormalStop(stop_before, hides_before));
+    REQUIRE(!VoiceInput::IsRecording());
+}
+
+void PreparePendingAsr()
+{
+    SetConfig(TestDoubaoConfig(true, true));
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+    REQUIRE(InjectAudioFrames(4800)); // 0.3 s at 16 kHz: more than 0.25 s
+    VoiceInput::StopRecording();
+    REQUIRE(WaitDoubaoFinishEntered());
+    REQUIRE(!VoiceInput::IsRecording());
+    // Release the physical key only after recording ended: this posts an idle
+    // Stop (filtered by the entry rules) and clears the hook suppression state,
+    // so a following Refresh cannot fall back to SendInput.
+    EndGesture(Gesture::RAlt);
+    PumpMessages();
+}
+
+void ExpectPendingAsrCommit()
+{
+    const bool barriered = QueueDisabledStartBarrier();
+    ReleaseConfigRead();
+    ReleaseDoubaoFinish();
+    REQUIRE(barriered);
+    REQUIRE(WaitForInsertText());
+    REQUIRE_EQ(InsertedText(), std::wstring(kFixedAsrText));
+}
+
+// Public Start, no physical hold: Refresh must not find a synthetic RAlt to
+// release, and a disabled config means it installs no OS hook. Only the real
+// control queue and capture.start gate are involved.
+void PrepareCapturingAudio()
+{
+    SetConfig(TestDoubaoConfig(true, true));
+    ResetCapture();
+    VoiceInput::StartRecording();
+    REQUIRE(WaitCaptureEntered());
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+    REQUIRE(InjectAudioFrames(4800));
+}
+
 struct ServiceFixture
 {
-    ServiceFixture()
+    // The teardown Cancel covers a start still parked in the config or capture
+    // gate. Negative lifecycle tests below disable it so a teardown Cancel
+    // cannot supply the stop/finish they assert absent; cleanup still releases
+    // every gate and Shutdown waits for all recognition futures.
+    explicit ServiceFixture(bool cancel_on_teardown = true) : cancel_on_teardown_(cancel_on_teardown)
     {
         SetConfig(TestConfig(true, false));
         ResetCapture();
         ResetObservations();
+        ResetCommit();
+        ResetDoubao();
         if (!VoiceInput::Initialize())
             throw std::runtime_error("VoiceInput::Initialize failed");
         VoiceInput::SetImeActive(true);
@@ -295,6 +520,9 @@ struct ServiceFixture
 
     ~ServiceFixture()
     {
+        // Release every gate before Shutdown: an assertion can fail while the
+        // control thread is in the config or capture gate and while the ASR
+        // worker is parked in Finish.
         {
             std::lock_guard<std::mutex> lock(g_config_mutex);
             g_block_next_config_read = false;
@@ -302,19 +530,31 @@ struct ServiceFixture
         }
         g_config_cv.notify_all();
         {
+            std::lock_guard<std::mutex> lock(g_doubao_mutex);
+            g_doubao_finish_release = true;
+        }
+        g_doubao_cv.notify_all();
+        {
             std::lock_guard<std::mutex> lock(g_capture_mutex);
             g_capture_release = true;
         }
         g_capture_cv.notify_all();
+        NotifyEffects();
         // The real handler clears the physical-key suppression state that
         // Shutdown would otherwise release with SendInput.
         ReleaseTestKeys();
-        VoiceInput::CancelRecording();
+        if (cancel_on_teardown_)
+            VoiceInput::CancelRecording();
+        // Shutdown waits for every recognition future, so leaving the fixture
+        // scope is a real "the future finished" barrier.
         VoiceInput::Shutdown();
     }
 
     ServiceFixture(const ServiceFixture &) = delete;
     ServiceFixture &operator=(const ServiceFixture &) = delete;
+
+  private:
+    bool cancel_on_teardown_ = true;
 };
 } // namespace
 
@@ -653,6 +893,220 @@ TEST_CASE(ctrl_f9_restart_with_held_shortcut_stops_on_release)
     REQUIRE(!VoiceInput::IsRecording());
 }
 
+// A Stop arriving after recording ended but while Finish still blocks the ASR
+// worker was filtered by the legacy idle rule; the recognized text must commit.
+TEST_CASE(stop_during_pending_asr_finish_commits_result)
+{
+    ServiceFixture fixture;
+    PreparePendingAsr();
+    VoiceInput::StopRecording();
+    ExpectPendingAsrCommit();
+}
+
+// Same phase for the public Cancel entry: the legacy idle entry filter dropped
+// it, so the already-finished audio still produced the fixed text.
+TEST_CASE(cancel_during_pending_asr_finish_commits_result)
+{
+    ServiceFixture fixture;
+    PreparePendingAsr();
+    VoiceInput::CancelRecording();
+    ExpectPendingAsrCommit();
+}
+
+// Switching IMEs while Finish is pending must not invalidate the ASR result.
+TEST_CASE(ime_deactivation_during_pending_asr_finish_commits_result)
+{
+    ServiceFixture fixture;
+    PreparePendingAsr();
+    VoiceInput::SetImeActive(false);
+    // Reactivate so the config-read sentinel can run; the deactivation's Cancel
+    // is already enqueued ahead of it.
+    VoiceInput::SetImeActive(true);
+    ExpectPendingAsrCommit();
+}
+
+// Disabling voice input through Refresh while Finish is pending must not
+// invalidate the ASR result.
+TEST_CASE(disabled_refresh_during_pending_asr_finish_commits_result)
+{
+    ServiceFixture fixture;
+    PreparePendingAsr();
+    SetConfig(TestConfig(false, true));
+    VoiceInput::RefreshKeyboardHook();
+    ExpectPendingAsrCommit();
+}
+
+// The overlay's own Cancel is the one legacy path that intentionally invalidated
+// a pending result: its callback bumps g_voice_session before the command runs.
+TEST_CASE(overlay_cancel_during_pending_asr_finish_discards_result)
+{
+    // No teardown Cancel: leaving the fixture scope is the only event after the
+    // release, and its Shutdown waits for the recognition future to finish. The
+    // commit decision therefore cannot be masked by an idle teardown Cancel that
+    // bumps g_voice_session. The pending ASR has no capture/start to cancel.
+    {
+        ServiceFixture fixture(false);
+        PreparePendingAsr();
+        REQUIRE(InvokeOverlayCancel());
+        PumpMessages(); // dispatch the callback's Cancel before the sentinel Start
+
+        const bool barriered = QueueDisabledStartBarrier();
+        ReleaseConfigRead();
+        ReleaseDoubaoFinish();
+        REQUIRE(barriered);
+    }
+    REQUIRE_EQ(InsertTextCount(), 0);
+}
+
+// Cancel while capture is already running stops the device and discards the
+// buffered audio; it must never move on to Finish/recognition.
+TEST_CASE(cancel_during_capturing_stops_without_finish_or_commit)
+{
+    int stop_before = 0;
+    {
+        // Without the teardown Cancel, only the action's own command can stop
+        // this capture; a filtered Cancel leaves the recording for Shutdown's
+        // Stop, which would enter Finish and fail the negative assertions.
+        ServiceFixture fixture(false);
+        PrepareCapturingAudio();
+        stop_before = CaptureStopCount();
+        VoiceInput::CancelRecording();
+    }
+    REQUIRE(CaptureStopCount() > stop_before);
+    REQUIRE(!VoiceInput::IsRecording());
+    REQUIRE(!DoubaoFinishEntered());
+    REQUIRE_EQ(InsertTextCount(), 0);
+}
+
+// IME deactivation while capture is running discards that recording, exactly
+// like an explicit Cancel, and never starts recognition.
+TEST_CASE(ime_deactivation_during_capturing_discards_without_finish_or_commit)
+{
+    int stop_before = 0;
+    {
+        ServiceFixture fixture(false);
+        PrepareCapturingAudio();
+        stop_before = CaptureStopCount();
+        VoiceInput::SetImeActive(false);
+    }
+    REQUIRE(CaptureStopCount() > stop_before);
+    REQUIRE(!VoiceInput::IsRecording());
+    REQUIRE(!DoubaoFinishEntered());
+    REQUIRE_EQ(InsertTextCount(), 0);
+}
+
+// Disabling voice input while capturing is the legacy "Stop" path: the
+// recording is finalized, Finish is entered, and the recognized text commits.
+TEST_CASE(disabled_refresh_during_capturing_stops_and_commits_result)
+{
+    ServiceFixture fixture;
+    PrepareCapturingAudio();
+    SetConfig(TestDoubaoConfig(false, true));
+    VoiceInput::RefreshKeyboardHook();
+    REQUIRE(WaitDoubaoFinishEntered());
+    REQUIRE(!VoiceInput::IsRecording());
+    ReleaseDoubaoFinish();
+    REQUIRE(WaitForInsertText());
+    REQUIRE_EQ(InsertedText(), std::wstring(kFixedAsrText));
+}
+
+// Releasing the hold shortcut while Start is still inside GetConfig must abort
+// that start: it may neither begin recording nor touch capture.start().
+TEST_CASE(hold_release_during_config_read_does_not_start_capture)
+{
+    ServiceFixture fixture;
+    ResetCapture();
+    BlockNextConfigRead();
+    BeginGesture(Gesture::RAlt);
+    PumpMessages();
+    REQUIRE(WaitConfigReadEntered());
+
+    EndGesture(Gesture::RAlt);
+    PumpMessages();
+    ReleaseConfigRead();
+
+    const bool barriered = QueueToggleBarrierAllowingBrokenCapture();
+    const bool capture_started = CaptureEntered();
+    ReleaseConfigRead();
+    REQUIRE(barriered);
+    REQUIRE(!capture_started);
+    REQUIRE(!VoiceInput::IsRecording());
+    VerifyNextHoldStartsAndStops();
+}
+
+// A Cancel issued while Start is still inside GetConfig must not let that start
+// reach capture.start().
+TEST_CASE(cancel_during_config_read_does_not_start_capture)
+{
+    ServiceFixture fixture;
+    ResetCapture();
+    BlockNextConfigRead();
+    BeginGesture(Gesture::RAlt);
+    PumpMessages();
+    REQUIRE(WaitConfigReadEntered());
+
+    VoiceInput::CancelRecording();
+    EndGesture(Gesture::RAlt);
+    PumpMessages();
+    ReleaseConfigRead();
+
+    const bool barriered = QueueToggleBarrierAllowingBrokenCapture();
+    const bool capture_started = CaptureEntered();
+    ReleaseConfigRead();
+    REQUIRE(barriered);
+    REQUIRE(!capture_started);
+    REQUIRE(!VoiceInput::IsRecording());
+    VerifyNextHoldStartsAndStops();
+}
+
+// Deactivating the IME while Start is inside GetConfig must latch the abort even
+// if the IME is reactivated before the config read returns.
+TEST_CASE(ime_deactivation_during_config_read_does_not_start_capture)
+{
+    ServiceFixture fixture;
+    ResetCapture();
+    BlockNextConfigRead();
+    BeginGesture(Gesture::RAlt);
+    PumpMessages();
+    REQUIRE(WaitConfigReadEntered());
+
+    VoiceInput::SetImeActive(false);
+    VoiceInput::SetImeActive(true);
+    EndGesture(Gesture::RAlt);
+    PumpMessages();
+    ReleaseConfigRead();
+
+    const bool barriered = QueueToggleBarrierAllowingBrokenCapture();
+    const bool capture_started = CaptureEntered();
+    ReleaseConfigRead();
+    REQUIRE(barriered);
+    REQUIRE(!capture_started);
+    REQUIRE(!VoiceInput::IsRecording());
+    VerifyNextHoldStartsAndStops();
+}
+
+// A Toggle that starts a recording and a Stop issued while its GetConfig is
+// still blocked must not leave the toggle's Start running to capture.start().
+TEST_CASE(toggle_stop_during_config_read_does_not_start_capture)
+{
+    ServiceFixture fixture;
+    ResetCapture();
+    BlockNextConfigRead();
+    VoiceInput::ToggleRecording();
+    REQUIRE(WaitConfigReadEntered());
+
+    VoiceInput::StopRecording();
+    ReleaseConfigRead();
+
+    const bool barriered = QueueToggleBarrierAllowingBrokenCapture();
+    const bool capture_started = CaptureEntered();
+    ReleaseConfigRead();
+    REQUIRE(barriered);
+    REQUIRE(!capture_started);
+    REQUIRE(!VoiceInput::IsRecording());
+    VerifyNextHoldStartsAndStops();
+}
+
 namespace test
 {
 std::vector<TestCase> &registry()
@@ -669,6 +1123,7 @@ Registrar::Registrar(const char *name, std::function<void()> fn)
 
 int main()
 {
+    g_test_thread_id = std::this_thread::get_id();
     int failures = 0;
     for (const auto &test_case : test::registry())
     {
@@ -709,14 +1164,18 @@ VoiceInputConfig GetConfiguredVoiceInput()
     // config without changing what this read returns.
     ++g_config_read_count;
     NotifyEffects();
-    if (g_block_next_config_read)
+    if (g_block_next_config_read && std::this_thread::get_id() != g_test_thread_id)
     {
         // Only the control thread's one read is gated; test-thread hook calls
-        // must keep working while it is parked.
+        // and RefreshKeyboardHook must keep working while it is parked.
         g_block_next_config_read = false;
         g_config_read_entered = true;
+        g_config_read_waiting = true;
         g_config_cv.notify_all();
         g_config_cv.wait(lock, [] { return g_config_read_release; });
+        // Exit before a following BlockNextConfigRead may reset g_config_read_release.
+        g_config_read_waiting = false;
+        g_config_cv.notify_all();
     }
     return snapshot;
 }
@@ -773,17 +1232,29 @@ void RestoreOtherSystemAudio()
 
 PipeClientActivation GetActivePipeClient()
 {
-    return {};
+    PipeClientActivation active;
+    active.client_id = 7;
+    active.epoch = 11;
+    return active;
 }
 
-bool SendToTsfWorkerThreadClientViaNamedpipe(uint64_t, uint64_t, UINT, const std::wstring &)
+bool SendToTsfWorkerThreadClientViaNamedpipe(uint64_t, uint64_t, UINT msg_type, const std::wstring &text)
 {
-    return false;
+    if (msg_type == Global::DataFromServerMsgTypeToTsfWorkerThread::InsertText)
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_commit_mutex);
+            g_inserted_text += text;
+        }
+        ++g_insert_text_count;
+        NotifyEffects();
+    }
+    return true;
 }
 
 bool SendVoiceCompositionToTsfWorker(uint64_t, uint64_t, UINT, const std::wstring &)
 {
-    return false;
+    return true;
 }
 
 namespace metasequoia::voice
@@ -795,13 +1266,14 @@ struct AudioCapture::Impl
 AudioCapture::AudioCapture() = default;
 AudioCapture::~AudioCapture() = default;
 
-bool AudioCapture::start(AudioCallback)
+bool AudioCapture::start(AudioCallback callback)
 {
     std::unique_lock<std::mutex> lock(g_capture_mutex);
     g_capture_entered = true;
     g_capture_cv.notify_all();
     NotifyEffects();
     g_capture_cv.wait(lock, [] { return g_capture_release; });
+    g_audio_callback = std::move(callback);
     return true;
 }
 
@@ -823,8 +1295,12 @@ bool AudioCapture::callback_failed() const
 WaveOverlay::WaveOverlay() = default;
 WaveOverlay::~WaveOverlay() = default;
 
-bool WaveOverlay::init(HINSTANCE, std::function<void(Action)>)
+bool WaveOverlay::init(HINSTANCE, std::function<void(Action)> action_handler)
 {
+    {
+        std::lock_guard<std::mutex> lock(g_overlay_mutex);
+        g_overlay_action_handler = std::move(action_handler);
+    }
     return true;
 }
 
@@ -900,7 +1376,7 @@ DoubaoAsrClient::~DoubaoAsrClient() = default;
 
 bool DoubaoAsrClient::Start()
 {
-    return false;
+    return true;
 }
 
 void DoubaoAsrClient::PushFloatSamples(const float *, std::size_t)
@@ -909,7 +1385,15 @@ void DoubaoAsrClient::PushFloatSamples(const float *, std::size_t)
 
 std::string DoubaoAsrClient::Finish()
 {
-    return {};
+    {
+        std::lock_guard<std::mutex> lock(g_doubao_mutex);
+        g_doubao_finish_entered = true;
+    }
+    g_doubao_cv.notify_all();
+    NotifyEffects();
+    std::unique_lock<std::mutex> lock(g_doubao_mutex);
+    g_doubao_cv.wait(lock, [] { return g_doubao_finish_release; });
+    return "asr-fixed-result";
 }
 
 std::string DoubaoAsrClient::LastError() const

@@ -211,11 +211,11 @@ void EnqueueControlCommand(ControlCommand command, std::uintptr_t lock_ticket = 
                 g_abort_start = false;
             if (!g_recording && !g_starting)
             {
-                if (command == ControlCommand::Stop)
-                {
-                    ClearLockForRequest(lock_ticket);
-                    return;
-                }
+                // Nothing is capturing and no start is marked as in flight.
+                // Keep any pending ASR result, but still retire the ticket this
+                // Stop/Cancel was created for.
+                ClearLockForRequest(lock_ticket);
+                return;
             }
             if (!g_control_commands.empty() && g_control_commands.back().command == command &&
                 g_control_commands.back().lock_ticket == lock_ticket)
@@ -248,11 +248,20 @@ void ControlLoop()
     for (;;)
     {
         ControlRequest request;
+        bool starts_recording = false;
         {
             std::unique_lock<std::mutex> lock(g_control_mutex);
             g_control_cv.wait(lock, [] { return !g_control_commands.empty(); });
             request = g_control_commands.front();
             g_control_commands.pop_front();
+            // Mark startup in the same critical section that removes the
+            // request. A Stop/Cancel arriving while GetConfig or the provider
+            // prep still runs must see g_starting instead of an idle gap.
+            if ((request.command == ControlCommand::Start || request.command == ControlCommand::Toggle) && !g_recording)
+            {
+                starts_recording = true;
+                g_starting = true;
+            }
         }
         if (request.command == ControlCommand::Exit)
         {
@@ -265,15 +274,26 @@ void ControlLoop()
             StopRecording(request.lock_ticket);
         else if (request.command == ControlCommand::Toggle)
         {
-            if (g_recording)
-                StopRecording(request.lock_ticket);
-            else
+            // The decision was already made when the request was dequeued;
+            // only this thread changes g_recording between the two points.
+            if (starts_recording)
                 StartRecording();
+            else
+                StopRecording(request.lock_ticket);
         }
         else if (request.command == ControlCommand::Lock)
             ApplyLockRequest(request.lock_ticket);
         else if (request.command == ControlCommand::Cancel)
             CancelRecording(request.lock_ticket);
+        if (starts_recording)
+        {
+            // Every StartRecording return path lands here. A late Stop/Cancel
+            // may have set g_abort_start; that request is queued and will
+            // handle the recording, but the flag must not poison the next start.
+            std::lock_guard<std::mutex> lock(g_control_mutex);
+            g_starting = false;
+            g_abort_start = false;
+        }
     }
 }
 
@@ -966,8 +986,8 @@ void AudioCallback(const float *samples, std::size_t frames)
 void AbortPendingStart(const char *reason)
 {
     (void)reason;
-    g_starting = false;
-    g_abort_start = false;
+    // The control loop owns the startup/completion flags; this only unwinds the
+    // partially prepared capture and session.
     ++g_voice_session;
     g_stream_inline_this_session.store(false);
     g_last_inline_preedit.clear();
@@ -1011,7 +1031,6 @@ bool StartRecording()
         ShowVoiceNotice(L"请先在设置的“语音输入”分区填写当前 ASR 提供商的 API Token。", MB_ICONINFORMATION);
         return false;
     }
-    g_starting = true;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_samples.clear();
@@ -1055,7 +1074,6 @@ bool StartRecording()
             g_last_inline_preedit.clear();
             g_doubao_asr.reset();
             ShowVoiceNotice(L"无法启动豆包流式语音识别。请检查 config.toml。");
-            g_starting = false;
             return false;
         }
     }
@@ -1077,7 +1095,6 @@ bool StartRecording()
         return false;
     }
     g_recording = true;
-    g_starting = false;
     g_overlay.set_input_level(0.0f);
     g_overlay.set_listening(true);
     g_overlay.show();
@@ -1370,8 +1387,9 @@ void VoiceInput::RefreshKeyboardHook()
     }
     if (!config.enabled && !g_recording)
     {
-        // Covers a Start still inside capture.start(), including one that has
-        // not set g_starting. An idle Cancel is intentionally not filtered.
+        // Cancel covers a Start that is still queued or already marked as
+        // starting. The control queue filters it when only an ASR result
+        // remains, so disabling voice input keeps a finished recognition.
         EnqueueControlCommand(ControlCommand::Cancel);
     }
     else if (stop_recording)
@@ -1397,8 +1415,8 @@ void VoiceInput::SetImeActive(bool active)
 
     g_active_hold_shortcut = HoldShortcut::None;
     g_lock_state = 0;
-    // Unconditional: Cancel also covers a Start that was dequeued before it
-    // could set g_starting.
+    // Cancel covers a queued or starting capture. The control queue filters it
+    // when only an ASR result remains, preserving the finished transcript.
     EnqueueControlCommand(ControlCommand::Cancel);
 }
 
