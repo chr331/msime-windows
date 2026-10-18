@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "voice_input_service.h"
+#include "voice_input_gesture.h"
 #include "config/ime_config.h"
 #include "doubao_asr_client.h"
 #include "log/candidate_diag_log.h"
@@ -83,6 +84,10 @@ std::atomic<bool> g_rwin_pressed{false};
 std::atomic<bool> g_f9_pressed{false};
 std::atomic<bool> g_ctrl_f9_consumed{false};
 std::atomic<bool> g_ralt_lock_mode{false};
+// The keyboard hook records the lock intent synchronously, so releasing the
+// hold shortcut does not race a Lock command that the control thread has not
+// applied yet.
+std::atomic<bool> g_lock_requested{false};
 std::atomic<bool> g_suppress_ralt_until_up{false};
 std::atomic<bool> g_suppress_win_until_up{false};
 enum class HoldShortcut
@@ -202,8 +207,13 @@ void ControlLoop()
         }
         else if (command == ControlCommand::Lock)
         {
-            g_ralt_lock_mode = true;
-            g_overlay.set_actions_visible(true);
+            // A queued Lock outlives a failed or aborted start. Lock only the
+            // recording that actually exists when the command runs.
+            if (g_recording)
+            {
+                g_ralt_lock_mode = true;
+                g_overlay.set_actions_visible(true);
+            }
         }
         else if (command == ControlCommand::Cancel)
             CancelRecording();
@@ -237,6 +247,7 @@ void ResetKeyboardShortcutState()
     g_suppress_ralt_until_up = false;
     g_suppress_win_until_up = false;
     g_active_hold_shortcut = HoldShortcut::None;
+    g_lock_requested = false;
 }
 
 bool IsHoldShortcutPressed(HoldShortcut shortcut)
@@ -257,11 +268,27 @@ bool IsHoldShortcutPressed(HoldShortcut shortcut)
 void ActivateHoldShortcut(HoldShortcut shortcut)
 {
     g_active_hold_shortcut = shortcut;
+    // A new gesture starts with no carry-over lock intent from a previous one.
+    g_lock_requested = false;
     if (shortcut == HoldShortcut::RAlt || shortcut == HoldShortcut::RCtrlRAlt)
         g_suppress_ralt_until_up = true;
     else if (shortcut == HoldShortcut::CtrlWin)
         g_suppress_win_until_up = true;
     PostMessageW(g_message_window, g_ralt_lock_mode ? kStopRecordingMessage : kStartRecordingMessage, 0, 0);
+}
+
+void RequestLock()
+{
+    if (g_ralt_lock_mode || g_lock_requested.exchange(true))
+        return;
+    PostMessageW(g_message_window, kLockRecordingMessage, 0, 0);
+}
+
+void ReleaseHoldShortcut()
+{
+    const bool requested = g_lock_requested.exchange(false);
+    if (!g_ralt_lock_mode && !requested)
+        PostMessageW(g_message_window, kStopRecordingMessage, 0, 0);
 }
 
 void ForceReleaseRAlt()
@@ -297,7 +324,7 @@ LRESULT CALLBACK VoiceMessageWindowProc(HWND hwnd, UINT message, WPARAM wparam, 
     }
 }
 
-LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wparam, LPARAM lparam)
+LRESULT CALLBACK HandleKeyboardHook(int code, WPARAM wparam, LPARAM lparam)
 {
     if (code != HC_ACTION)
         return CallNextHookEx(g_keyboard_hook, code, wparam, lparam);
@@ -393,15 +420,14 @@ LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wparam, LPARAM lparam)
     else if (active_before != HoldShortcut::None && up && !IsHoldShortcutPressed(active_before))
     {
         g_active_hold_shortcut = HoldShortcut::None;
-        if (!g_ralt_lock_mode)
-            PostMessageW(g_message_window, kStopRecordingMessage, 0, 0);
+        ReleaseHoldShortcut();
     }
 
     const HoldShortcut active_now = g_active_hold_shortcut.load();
     if (key->vkCode == VK_SPACE && active_now != HoldShortcut::None && config.hotkey_hold_space_lock)
     {
-        if (down && !g_ralt_lock_mode)
-            PostMessageW(g_message_window, kLockRecordingMessage, 0, 0);
+        if (down)
+            RequestLock();
         return 1;
     }
 
@@ -994,11 +1020,13 @@ bool StartRecording()
 
 void StopRecording()
 {
+    // A Stop that finds no recording is still the end of the locked state; the
+    // early return must not leave a lock behind.
+    g_ralt_lock_mode = false;
     if (!g_recording)
         return;
     const VoiceInputConfig config = GetConfiguredVoiceInput();
     g_recording = false;
-    g_ralt_lock_mode = false;
     g_overlay.set_listening(false);
     g_overlay.set_input_level(0.0f);
     // 先收掉提示条再关设备：WASAPI 的 stop() 可能阻塞（设备被独占或驱动挂住），
@@ -1143,6 +1171,9 @@ void StopRecording()
 
 void CancelRecording()
 {
+    // Cancel is terminal too: an idle cancel (including one that aborts a
+    // starting capture) must leave no effective lock.
+    g_ralt_lock_mode = false;
     if (!g_recording)
     {
         {
@@ -1195,6 +1226,14 @@ void DiscardRecording(const VoiceInputConfig &config)
 }
 } // namespace
 
+namespace VoiceInput::Detail
+{
+LRESULT CALLBACK KeyboardHookProc(int code, WPARAM wparam, LPARAM lparam)
+{
+    return HandleKeyboardHook(code, wparam, lparam);
+}
+} // namespace VoiceInput::Detail
+
 bool VoiceInput::Initialize()
 {
     if (g_initialized)
@@ -1237,7 +1276,7 @@ bool VoiceInput::Initialize()
     g_control_thread = std::thread(ControlLoop);
     if (ShouldInstallKeyboardHook(GetConfiguredVoiceInput()))
     {
-        g_keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHookProc, instance, 0);
+        g_keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, VoiceInput::Detail::KeyboardHookProc, instance, 0);
         if (!g_keyboard_hook)
             return false;
     }
@@ -1268,7 +1307,8 @@ void VoiceInput::RefreshKeyboardHook()
 
     if (ShouldInstallKeyboardHook(config))
     {
-        g_keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHookProc, GetModuleHandleW(nullptr), 0);
+        g_keyboard_hook =
+            SetWindowsHookExW(WH_KEYBOARD_LL, VoiceInput::Detail::KeyboardHookProc, GetModuleHandleW(nullptr), 0);
     }
 }
 
@@ -1279,6 +1319,7 @@ void VoiceInput::SetImeActive(bool active)
         return;
 
     g_active_hold_shortcut = HoldShortcut::None;
+    g_lock_requested = false;
     g_ralt_lock_mode = false;
     if (g_recording)
         EnqueueControlCommand(ControlCommand::Cancel);
