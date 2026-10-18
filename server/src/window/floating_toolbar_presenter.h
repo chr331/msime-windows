@@ -11,6 +11,8 @@ class FloatingToolbarPresenter
     bool Bind(HWND hwnd);
     bool IsBound() const;
     void Present();
+    // Whole-toolbar opacity (0..1) for the auto-hide fade; redraws on change.
+    void SetOpacity(float opacity);
     void ApplyTheme();
     void ApplyAppearance();
     // suggestedRect: WM_DPICHANGED's recommended placement (lParam).

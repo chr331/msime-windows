@@ -16,27 +16,42 @@ namespace metasequoia::local_modes
 {
 namespace
 {
-// 一行拆字数据。code 是部件拼音连写、word 是汉字、weight 是字频。
+// 一行拆字数据。code 是部件拼音连写、word 是汉字、weight 是字频。两段文字首尾相接存在
+// Table::text 里：十几万行各带两个 std::string 要占十多 MB 常驻内存，压成一块文本池后只剩几 MB。
 struct Entry
 {
-    std::string code;
-    std::string word;
+    std::uint32_t offset = 0;
+    std::uint16_t code_size = 0;
+    std::uint16_t word_size = 0;
     std::int64_t weight = 0;
 };
 
 struct Table
 {
+    std::string text;
     // 文件顺序即字频降序（生成脚本已排序），所以某前缀的首个命中就是它最高频的那条。
     std::vector<Entry> entries;
     // entries 的下标按 code 排序。前缀命中的行在排序视图里连续，查询只扫这一小段。
-    std::vector<std::size_t> by_code;
+    std::vector<std::uint32_t> by_code;
+
+    std::string_view code(std::size_t index) const
+    {
+        const Entry &entry = entries[index];
+        return std::string_view(text).substr(entry.offset, entry.code_size);
+    }
+
+    std::string_view word(std::size_t index) const
+    {
+        const Entry &entry = entries[index];
+        return std::string_view(text).substr(entry.offset + entry.code_size, entry.word_size);
+    }
 };
 
 // 生成脚本不会写 BOM，但保留与 helpcode 相同的防御：表由外部工具产出，首行多一个 BOM
 // 不该让整张表失效。
 constexpr char kUtf8Bom[] = "\xEF\xBB\xBF";
 
-bool is_lower_ascii_code(const std::string &code)
+bool is_lower_ascii_code(std::string_view code)
 {
     return std::all_of(code.begin(), code.end(),
                        [](unsigned char character) { return character >= 'a' && character <= 'z'; });
@@ -78,10 +93,16 @@ std::shared_ptr<const Table> load_table(const std::filesystem::path &path)
         {
             continue;
         }
-        std::string code = line.substr(0, first_tab);
-        std::string word = line.substr(first_tab + 1, second_tab - first_tab - 1);
+        const std::string_view code = std::string_view(line).substr(0, first_tab);
+        const std::string_view word = std::string_view(line).substr(first_tab + 1, second_tab - first_tab - 1);
         // 拆字输入只可能是 a-z，码字域之外的码（繁体、注音、含撇号未归一）没有查询语义。
         if (code.empty() || word.empty() || !is_lower_ascii_code(code))
+        {
+            continue;
+        }
+        // 条目里的长度和偏移是定宽整数；真实数据的一行只有几十字节，超出的行不可能是合法拆字。
+        if (code.size() > UINT16_MAX || word.size() > UINT16_MAX ||
+            table->text.size() + code.size() + word.size() > UINT32_MAX)
         {
             continue;
         }
@@ -94,17 +115,25 @@ std::shared_ptr<const Table> load_table(const std::filesystem::path &path)
         {
             continue;
         }
-        table->entries.push_back({std::move(code), std::move(word), weight});
+        Entry entry;
+        entry.offset = static_cast<std::uint32_t>(table->text.size());
+        entry.code_size = static_cast<std::uint16_t>(code.size());
+        entry.word_size = static_cast<std::uint16_t>(word.size());
+        entry.weight = weight;
+        table->text.append(code);
+        table->text.append(word);
+        table->entries.push_back(entry);
     }
+    table->text.shrink_to_fit();
+    table->entries.shrink_to_fit();
 
     table->by_code.resize(table->entries.size());
     for (std::size_t index = 0; index < table->entries.size(); ++index)
     {
-        table->by_code[index] = index;
+        table->by_code[index] = static_cast<std::uint32_t>(index);
     }
-    std::sort(table->by_code.begin(), table->by_code.end(), [&](std::size_t left, std::size_t right) {
-        return table->entries[left].code < table->entries[right].code;
-    });
+    std::sort(table->by_code.begin(), table->by_code.end(),
+              [&](std::uint32_t left, std::uint32_t right) { return table->code(left) < table->code(right); });
     return table;
 }
 
@@ -139,9 +168,9 @@ std::vector<WordItem> query_radical(const std::filesystem::path &decomposition_p
         return {};
     }
 
-    const auto lower = std::lower_bound(
-        table->by_code.begin(), table->by_code.end(), code,
-        [&](std::size_t index, const std::string &value) { return table->entries[index].code < value; });
+    const auto lower =
+        std::lower_bound(table->by_code.begin(), table->by_code.end(), std::string_view(code),
+                         [&](std::uint32_t index, std::string_view value) { return table->code(index) < value; });
 
     // 全码命中在前、仅前缀命中在后，各自按字频：打全了某个生僻字的拆法，它不能被一串更高频的
     // 长码挤出 limit。
@@ -149,7 +178,7 @@ std::vector<WordItem> query_radical(const std::filesystem::path &decomposition_p
     std::vector<std::size_t> prefix_matches;
     for (auto it = lower; it != table->by_code.end(); ++it)
     {
-        const std::string &entry_code = table->entries[*it].code;
+        const std::string_view entry_code = table->code(*it);
         if (entry_code.size() < code.size() || entry_code.compare(0, code.size(), code) != 0)
         {
             // 同一前缀的行在排序视图里连续，越过前缀范围即可停。
@@ -174,13 +203,14 @@ std::vector<WordItem> query_radical(const std::filesystem::path &decomposition_p
             {
                 return result;
             }
-            const Entry &entry = table->entries[index];
-            if (!seen.insert(entry.word).second)
+            const std::string_view word = table->word(index);
+            if (!seen.insert(word).second)
             {
                 continue;
             }
             // 注音不在这里填：引擎没有汉字→拼音能力，由 Server 组装候选时补。
-            result.emplace_back(std::string{}, entry.word, entry.weight, CandidateSource::Generated);
+            result.emplace_back(std::string{}, std::string(word), table->entries[index].weight,
+                                CandidateSource::Generated);
         }
     }
     return result;

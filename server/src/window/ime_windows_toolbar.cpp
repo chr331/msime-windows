@@ -223,10 +223,11 @@ ULONGLONG FloatingToolbarAutoHideDelayMs()
 
 void SetFloatingToolbarAlpha(BYTE alpha)
 {
-    // The host is layered (PrepareLayeredHostWindow). A lost alpha is what the
-    // host-state trace calls an invisible toolbar, so every path that ends a
-    // fade puts 255 back.
-    SetLayeredWindowAttributes(::global_hwnd_ftb, 0, alpha, LWA_ALPHA);
+    // The host has no redirection surface, so the fade is drawn by the
+    // presenter rather than applied as a layered-window alpha. A lost alpha
+    // would leave an invisible toolbar, so every path that ends a fade puts
+    // 255 back.
+    FloatingToolbarPresenter::Instance().SetOpacity(static_cast<float>(alpha) / 255.0f);
 }
 
 // Set when a finished fade hid the host at alpha 0; the next show owes it 255.

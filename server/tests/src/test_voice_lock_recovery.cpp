@@ -1470,7 +1470,7 @@ void WaveOverlay::set_actions_visible(bool visible)
 CuePlayer::CuePlayer() = default;
 CuePlayer::~CuePlayer() = default;
 
-bool CuePlayer::init(const std::wstring &, const std::wstring &)
+bool CuePlayer::init(const std::wstring &, const std::wstring &, bool)
 {
     return true;
 }

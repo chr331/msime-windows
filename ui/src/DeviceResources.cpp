@@ -189,6 +189,26 @@ Microsoft::WRL::ComPtr<ID3D11Device> TakePrewarmedDevice()
     }
     return pending.valid() ? pending.get() : nullptr;
 }
+
+// Every window a thread draws shares that thread's Direct3D device. Each hardware device costs
+// about 10 MB of private memory in the driver, and the windows of one thread never touch its
+// immediate context concurrently. Each window still has its own Direct2D device and context.
+// A removed device is replaced here; the other windows find out from their own next draw,
+// discard their target and come back for the replacement.
+Microsoft::WRL::ComPtr<ID3D11Device> AcquireThreadDevice()
+{
+    thread_local Microsoft::WRL::ComPtr<ID3D11Device> shared;
+    if (shared && shared->GetDeviceRemovedReason() == S_OK)
+    {
+        return shared;
+    }
+    shared = TakePrewarmedDevice();
+    if (!shared)
+    {
+        shared = CreateD3DDevice();
+    }
+    return shared;
+}
 } // namespace
 
 DeviceResources::DeviceResources() = default;
@@ -594,11 +614,7 @@ void DeviceResources::SetCompositionOpaque(bool opaque)
 
 bool DeviceResources::CreateCompositionDevice()
 {
-    d3dDevice_ = TakePrewarmedDevice();
-    if (!d3dDevice_)
-    {
-        d3dDevice_ = CreateD3DDevice();
-    }
+    d3dDevice_ = AcquireThreadDevice();
     return d3dDevice_ && SUCCEEDED(d3dDevice_.As(&dxgiDevice_)) &&
            SUCCEEDED(d2dFactory1_->CreateDevice(dxgiDevice_.Get(), d2dDevice_.GetAddressOf())) &&
            SUCCEEDED(d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, deviceContext_.GetAddressOf()));

@@ -10,6 +10,7 @@
 #include <climits>
 #include <cstring>
 #include <fmt/format.h>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utf8/cpp17.h>
@@ -1615,13 +1616,21 @@ std::vector<WordItem> QuanpinDictionary::append_sparse_pinyin_fallbacks(const qu
 
 void QuanpinDictionary::append_unique_words(std::vector<WordItem> &result, const std::vector<WordItem> &extra)
 {
+    // 两边都是整串查询结果，未截断时各有成百上千条，逐条线性比对会在一次按键里做上百万次字符串比较。
+    // 先按最终大小预留，push_back 不再搬动元素，集合里的 string_view 在整个合并期间都有效。
+    result.reserve(result.size() + extra.size());
+    std::unordered_set<std::string_view> seen;
+    seen.reserve(result.size() + extra.size());
+    for (const auto &existing : result)
+    {
+        seen.insert(existing.word);
+    }
     for (const auto &item : extra)
     {
-        const auto exists = std::find_if(result.begin(), result.end(),
-                                         [&](const WordItem &existing) { return existing.word == item.word; });
-        if (exists == result.end())
+        if (seen.count(item.word) == 0)
         {
             result.push_back(item);
+            seen.insert(result.back().word);
         }
     }
 }

@@ -7,6 +7,7 @@
 | 目录 | 名称 | 说明 |
 | --- | --- | --- |
 | [`green_leaf`](green_leaf/) | 绿叶 | 官方贴图皮肤（`canvas` 全贴图，原 `canvas-demo`）：深色夜蓝、浅色薄荷白的九宫格玻璃面板，面板后探出的叶子与右上角闪烁的 APNG 星光。设置页把它列在内置皮肤之后，不在「外部皮肤」里 |
+| [`sakura-night`](sakura-night/) | 夜樱 | v2 全贴图皮肤（`canvas`，取自 `examples/skin-examples`）：紫夜玻璃九宫格面板、面板后的月亮、APNG 飘落花瓣与 GIF 闪烁星星 |
 | [`acrylic`](acrylic/) | 亚克力 Acrylic | 候选卡片背后垫系统亚克力，模糊后面的窗口 |
 | [`mica`](mica/) | 云母 Mica | 候选卡片背后垫系统云母，取样桌面壁纸（Windows 11；更早的系统按亚克力画） |
 | [`niya-demo`](niya-demo/) | Niya Demo | 官方外部皮肤样例：候选框上方的人物装饰图、星点背景图、12dip 圆角，以及配套的悬浮工具栏配色 |
@@ -18,7 +19,7 @@
 | [`sogou-classic`](sogou-classic/) | 搜狗经典·石墨 | 基于石墨，仿经典搜狗：白底浅蓝边框、蓝字候选、首选红字不铺底色、拼音下方浅蓝分隔线 |
 | [`wechat_glass`](wechat_glass/) | 微信玻璃 | 移植自 rime-wechat-glass 的微信绿配色与紧凑几何，磨砂玻璃用自绘噪点底图近似 |
 
-除 `sogou-classic` 基于 `graphite`、`shoudao-blue` 基于 `willow_green`、`green_leaf` 基于 `canvas` 外，其余皮肤均基于 `fluent`；全部支持横排 / 竖排布局以及深色 / 浅色主题。
+除 `sogou-classic` 基于 `graphite`、`shoudao-blue` 基于 `willow_green`、`green_leaf` 与 `sakura-night` 基于 `canvas` 外，其余皮肤均基于 `fluent`；全部支持横排 / 竖排布局以及深色 / 浅色主题。
 
 官方皮肤包的名单在 Server 的 `CandidateSkinCatalog::OfficialPackageIds()`（目前只有 `green_leaf`）。它们和其他随包皮肤一样装到 `skins\<id>`、照外部皮肤加载，只是设置页的展示位置不同；用户删掉目录后设置页就不再列出。
 

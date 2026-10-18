@@ -113,11 +113,12 @@ std::wstring DescribeCloak(DWORD cloaked)
 
 // A host can be fully transparent while every ordinary check says it is fine.
 // Only a handful of things produce that, and none of them are visible from
-// IsWindowVisible: a layered window whose alpha was lost or whose WS_EX_LAYERED
-// style went away paints nothing at all, a host still DWM-cloaked is excluded
-// from composition while input routing continues normally, and a host parked
-// off every monitor has nowhere to paint. Record all of them together so a
-// blank window can be attributed instead of guessed at.
+// IsWindowVisible: a host still DWM-cloaked is excluded from composition while
+// input routing continues normally, a host parked off every monitor has nowhere
+// to paint, and a host that became layered without its alpha paints nothing at
+// all. The small-window hosts are not layered, so layered attributes only show
+// up here when something set the style behind our back. Record all of them
+// together so a blank window can be attributed instead of guessed at.
 std::wstring DescribeHostWindowState(HWND hwnd)
 {
     if (!hwnd)
@@ -136,16 +137,17 @@ std::wstring DescribeHostWindowState(HWND hwnd)
     COLORREF color_key = 0;
     BYTE alpha = 0;
     DWORD layered_flags = 0;
-    const bool layered_ok = GetLayeredWindowAttributes(hwnd, &color_key, &alpha, &layered_flags) != FALSE;
     const LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    const bool layered = (ex_style & WS_EX_LAYERED) != 0;
+    const bool layered_ok = layered && GetLayeredWindowAttributes(hwnd, &color_key, &alpha, &layered_flags) != FALSE;
 
     return fmt::format(L"rect=({},{},{}x{}) client={}x{} on_monitor={} visible={} cloaked={} "
                        L"layered_attrs={} alpha={} lwa_flags={:#x} ex_layered={} ex_topmost={}",
                        window_rect.left, window_rect.top, window_rect.right - window_rect.left,
                        window_rect.bottom - window_rect.top, client_rect.right, client_rect.bottom,
                        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) != nullptr, IsWindowVisible(hwnd) != FALSE,
-                       DescribeCloak(cloaked), layered_ok ? L"ok" : L"MISSING", static_cast<unsigned>(alpha),
-                       layered_flags, (ex_style & WS_EX_LAYERED) != 0, (ex_style & WS_EX_TOPMOST) != 0);
+                       DescribeCloak(cloaked), !layered ? L"n/a" : (layered_ok ? L"ok" : L"MISSING"),
+                       static_cast<unsigned>(alpha), layered_flags, layered, (ex_style & WS_EX_TOPMOST) != 0);
 }
 
 } // namespace
@@ -175,17 +177,6 @@ std::wstring DescribeTrayMenuHostState()
 
 namespace
 {
-
-void PrepareLayeredHostWindow(HWND hwnd)
-{
-    if (!hwnd)
-    {
-        return;
-    }
-    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
-    MARGINS mar = {-1};
-    DwmExtendFrameIntoClientArea(hwnd, &mar);
-}
 
 // Shown on a real monitor but DWM-cloaked: the user sees nothing until the
 // presenter uncloaks the host for its first real show.
@@ -311,7 +302,11 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     //
     // 任务栏托盘区的菜单窗口
     //
-    dwExStyle = WS_EX_LAYERED |                               //
+    // Like the candidate window, the presenter's DirectComposition visual is
+    // the only content. A layered host also kept a GDI redirection surface that
+    // nothing paints: after a resize it could hold stale video memory, which
+    // showed through the transparent shadow margin.
+    dwExStyle = WS_EX_NOREDIRECTIONBITMAP |                   //
                 WS_EX_TOOLWINDOW |                            //
                 WS_EX_NOACTIVATE;                             //
                                                               // WS_EX_TOPMOST;              //
@@ -336,7 +331,6 @@ int CreateCandidateWindow(HINSTANCE hInstance)
 #endif
         return 1;
     }
-    PrepareLayeredHostWindow(hwnd_menu);
     ::global_hwnd_menu = hwnd_menu;
     TrayMenuPresenter::Instance().Bind(hwnd_menu);
 
@@ -345,10 +339,12 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     //
     ::FTB_WND_WIDTH = ConfiguredFloatingToolbarWidth();
     ::FTB_WND_HEIGHT = ConfiguredFloatingToolbarHeight();
-    dwExStyle = WS_EX_LAYERED |    //
-                WS_EX_TOOLWINDOW | //
-                WS_EX_NOACTIVATE;  //
-                                   // WS_EX_TOPMOST;                               //
+    // Same as the tray menu: no redirection surface under the composition
+    // visual. The auto-hide fade goes through the presenter's opacity.
+    dwExStyle = WS_EX_NOREDIRECTIONBITMAP | //
+                WS_EX_TOOLWINDOW |          //
+                WS_EX_NOACTIVATE;           //
+                                            // WS_EX_TOPMOST;                               //
     MonitorCoordinates ftbMonitor = GetMainMonitorCoordinates();
     const int ftbShadowWidth = GetConfiguredFloatingToolbarShadow() ? ::FTB_WND_SHADOW_WIDTH : 0;
     const int ftbWidth = static_cast<int>((::FTB_WND_WIDTH + ftbShadowWidth) * scale);
@@ -390,7 +386,6 @@ int CreateCandidateWindow(HINSTANCE hInstance)
 #endif
         return 1;
     }
-    PrepareLayeredHostWindow(hwnd_ftb);
     ::global_hwnd_ftb = hwnd_ftb;
     FanyNamedPipe::RegisterStatusSnapshotWindow(hwnd_ftb);
     FloatingToolbarPresenter::Instance().Bind(hwnd_ftb);

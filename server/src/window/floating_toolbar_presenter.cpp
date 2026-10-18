@@ -367,6 +367,7 @@ struct FloatingToolbarPresenter::Impl
     bool light = false;
     bool shadow = false;
     float cardHeightDip = 0.0f;
+    float opacity = 1.0f;
     int cnEn = 1;
     int doubleSingleByte = 0;
     int punctuation = 1;
@@ -757,12 +758,26 @@ void FloatingToolbarPresenter::Present()
     }
     target->BeginDraw();
     target->Clear(D2D1::ColorF(0, 0.0f));
-    if (msimeui::Scene *scene = impl_->window->GetScene())
+    msimeui::Scene *scene = impl_->window->GetScene();
+    if (scene && impl_->opacity > 0.0f)
     {
         const float dpi = impl_->window->GetDpi();
         scene->EnsureLayout({msimeui::PixelsToDips(static_cast<float>(width), dpi),
                              msimeui::PixelsToDips(static_cast<float>(height), dpi)});
+        // A layer fades the card, its shadow and the icons as one image, the
+        // way the layered-window alpha used to.
+        const bool faded = impl_->opacity < 1.0f;
+        if (faded)
+        {
+            target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                    D2D1::IdentityMatrix(), impl_->opacity),
+                              nullptr);
+        }
         scene->Render(impl_->resources);
+        if (faded)
+        {
+            target->PopLayer();
+        }
     }
     const HRESULT hr = target->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET)
@@ -771,6 +786,21 @@ void FloatingToolbarPresenter::Present()
         return;
     }
     impl_->resources.Present();
+}
+
+void FloatingToolbarPresenter::SetOpacity(float opacity)
+{
+    if (!impl_)
+    {
+        return;
+    }
+    opacity = (std::clamp)(opacity, 0.0f, 1.0f);
+    if (opacity == impl_->opacity)
+    {
+        return;
+    }
+    impl_->opacity = opacity;
+    Present();
 }
 
 bool FloatingToolbarPresenter::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)

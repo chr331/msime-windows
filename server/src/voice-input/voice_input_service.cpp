@@ -1365,7 +1365,8 @@ bool VoiceInput::Initialize()
             g_overlay.hide();
         }))
         return false;
-    g_cue_player.init(ResolveCuePath(L"start.mp3"), ResolveCuePath(L"end.mp3"));
+    // 开着语音输入时和原先一样立刻打开，第一次录音的提示音不晚到；关着时推迟到第一次播放。
+    g_cue_player.init(ResolveCuePath(L"start.mp3"), ResolveCuePath(L"end.mp3"), GetConfiguredVoiceInput().enabled);
     RestoreOtherSystemAudio();
 
     WNDCLASSW window_class{};

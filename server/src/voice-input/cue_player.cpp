@@ -23,20 +23,37 @@ CuePlayer::~CuePlayer()
     engine_ = nullptr;
 }
 
-bool CuePlayer::init(const std::wstring &start_path, const std::wstring &end_path)
+bool CuePlayer::init(const std::wstring &start_path, const std::wstring &end_path, bool open_now)
 {
     shutdown();
+    start_path_ = start_path;
+    end_path_ = end_path;
+    configured_ = true;
+    return !open_now || open();
+}
+
+bool CuePlayer::open()
+{
+    if (engine_initialized_)
+    {
+        return true;
+    }
+    if (!configured_)
+    {
+        return false;
+    }
 
     if (ma_engine_init(nullptr, engine_) != MA_SUCCESS)
     {
         printf("[AUDIO] CuePlayer engine init failed.\n");
         fflush(stdout);
+        configured_ = false;
         return false;
     }
     engine_initialized_ = true;
 
-    load_sound(start_path, start_sound_, &start_loaded_, "start");
-    load_sound(end_path, end_sound_, &end_loaded_, "end");
+    load_sound(start_path_, start_sound_, &start_loaded_, "start");
+    load_sound(end_path_, end_sound_, &end_loaded_, "end");
 
     return true;
 }
@@ -60,15 +77,18 @@ void CuePlayer::shutdown()
         ma_engine_uninit(engine_);
         engine_initialized_ = false;
     }
+    configured_ = false;
 }
 
 void CuePlayer::play_start()
 {
+    open();
     play_sound(start_sound_, start_loaded_, "start");
 }
 
 void CuePlayer::play_end()
 {
+    open();
     play_sound(end_sound_, end_loaded_, "end");
 }
 
