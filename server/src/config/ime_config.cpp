@@ -197,6 +197,7 @@ bool g_paging_page_up_down_enabled = true;
 // "scroll inactive windows on hover" is on, so the feature is opt-in.
 bool g_paging_mouse_wheel_enabled = false;
 bool g_candidate_arrow_navigation_enabled = true;
+bool g_candidate_horizontal_arrow_navigation_enabled = false;
 bool g_word_to_character_enabled = false;
 std::string g_word_to_character_keys = "brackets";
 bool g_smart_punctuation_enabled = false;
@@ -679,6 +680,8 @@ bool LoadImeConfig()
         g_paging_page_up_down_enabled = tbl["general"]["paging_page_up_down"].value_or(true);
         g_paging_mouse_wheel_enabled = tbl["general"]["paging_mouse_wheel"].value_or(false);
         g_candidate_arrow_navigation_enabled = tbl["general"]["candidate_arrow_navigation"].value_or(true);
+        g_candidate_horizontal_arrow_navigation_enabled =
+            tbl["general"]["candidate_horizontal_arrow_navigation"].value_or(false);
         g_word_to_character_enabled = tbl["input"]["word_to_character"].value_or(false);
         g_word_to_character_keys = tbl["input"]["word_to_character_keys"].value_or(std::string("brackets"));
         if (g_word_to_character_keys != "minus_equal")

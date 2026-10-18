@@ -1002,6 +1002,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     const bool sensitive_field = (Global::ModifiersDown & FanyImePipeFlags::SensitiveField) != 0;
     Global::ModifiersDown &= ~FanyImePipeFlags::SensitiveField;
     NoteAiContextKeySource(client_id, activation_epoch, sensitive_field);
+    // 横排候选的左右键：TSF 只在这项生效、且协商过 CompositionRestore 时打这个标记，并且一定会读这次的回复。
+    // 是否生效以标记为准而不是再查配置：配置刚改、TSF 还没收到新状态时，两边仍按同一个约定走。
+    const bool horizontal_arrow_request = (Global::ModifiersDown & FanyImePipeFlags::HorizontalArrowSelection) != 0;
+    Global::ModifiersDown &= ~FanyImePipeFlags::HorizontalArrowSelection;
 
     // MainPipeClientThread only enqueues this from a negotiated client with a known action.
     if (namedpipeData.event_type == FanyImePipeEventType::InputStateAction)
@@ -1067,13 +1071,29 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         HandleTranslationCommitKey(client_id, activation_epoch, request_id, static_cast<int>(digit_position) - 1);
         return;
     }
+    // 横排候选的左右键在这里决定是移高亮还是移光标（规则见 ShouldArrowMoveCandidateSelection）。要在下面 R 模式
+    // 把光标换回引擎坐标之前判断：此刻光标和 raw_input_with_cases 都还是含 R 前缀的显示坐标，串尾的含义一致。
+    const bool horizontal_arrow_key =
+        horizontal_arrow_request && (Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) &&
+        (Global::ModifiersDown & 0b00000111u) == 0 && !IsUiLessMode() && ClientNegotiatedCompositionRestore(client_id);
+    bool arrow_moves_selection = false;
+    if (horizontal_arrow_key)
+    {
+        const auto &composition = GlobalIme::composition;
+        const auto &ui = Global::candidate_ui;
+        arrow_moves_selection = FanyImeIpc::ShouldArrowMoveCandidateSelection(
+            Global::Keycode, composition.caret_position >= composition.raw_input_with_cases.size(),
+            ui.current_page_start() + ui.selected_index_in_page, ui.item_total_count);
+    }
+
     // 译文页、日期页只认选词和翻页/移动高亮。其它任何键都先把候选框换回原来那一屏，然后照常处理，
     // 所以退格、字母、回车、标点在子页上的表现和没打开过它时完全一致。
     if (IsCandidateSubPageActive())
     {
         // Shift 放行是给 Shift+Tab 上一页留的；Ctrl/Alt 组合一律退出。
-        const bool stays_on_sub_page = (Global::ModifiersDown & 0b00000110u) == 0 &&
-                                       (IsSelectionKey(Global::Keycode) || IsCandidateNavigationKey(Global::Keycode));
+        const bool stays_on_sub_page =
+            (Global::ModifiersDown & 0b00000110u) == 0 &&
+            (IsSelectionKey(Global::Keycode) || IsCandidateNavigationKey(Global::Keycode) || arrow_moves_selection);
         if (!stays_on_sub_page)
         {
             ExitCandidateSubPage();
@@ -1210,11 +1230,13 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
          !is_v_mode_shift_digit_selection &&
          IsCommitWithHighlightedCandidatePunctuationInCandidateMode(Global::Keycode, Global::Wch));
     const bool is_selection_key = IsSelectionKey(Global::Keycode);
+    // 移高亮的左右键不碰组合，交给下面的候选导航分支。
     const bool is_composition_edit_key =
-        Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT || Global::Keycode == VK_BACK ||
-        Global::Keycode == VK_DELETE || (Global::Keycode >= 'A' && Global::Keycode <= 'Z') ||
-        is_manual_pinyin_separator || is_microsoft_shuangpin_ing_key || is_mid_sentence_helpcode_marker ||
-        is_direct_helpcode_slash || is_japanese_long_vowel || is_date_time_input_key || is_v_mode_input_key;
+        ((Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) && !arrow_moves_selection) ||
+        Global::Keycode == VK_BACK || Global::Keycode == VK_DELETE ||
+        (Global::Keycode >= 'A' && Global::Keycode <= 'Z') || is_manual_pinyin_separator ||
+        is_microsoft_shuangpin_ing_key || is_mid_sentence_helpcode_marker || is_direct_helpcode_slash ||
+        is_japanese_long_vowel || is_date_time_input_key || is_v_mode_input_key;
     const bool should_forward_key_to_session = !is_commit_with_highlighted_candidate_punctuation && !is_selection_key &&
                                                !is_paging_key && !is_composition_edit_key;
 
@@ -1316,6 +1338,11 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         ScopedKeyStage engine_edit{client_id, activation_epoch, request_id, L"handle-engine"};
         ApplyCompositionEditKey(Global::Keycode, Global::Wch, Global::ModifiersDown, client_supports_restore,
                                 composition_restored);
+        // 横排候选左右键移的是光标：TSF 不再自己移，等 CompositionRestored 里的光标（原地不动也要回这一帧）。
+        if (horizontal_arrow_key)
+        {
+            composition_restored = true;
+        }
     }
     else if (should_forward_key_to_session)
     {
@@ -1669,7 +1696,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         select_space_digit.Stop();
         SendCurrentDataToClient(client_id, activation_epoch, request_id);
     }
-    else if (Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT)
+    else if ((Global::Keycode == VK_LEFT || Global::Keycode == VK_RIGHT) && !arrow_moves_selection)
     {
         if (IsUiLessMode())
         {
@@ -1712,7 +1739,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
             }
         }
     }
-    else if (IsCandidateNavigationKey(Global::Keycode) && !is_v_mode_input_key)
+    else if ((IsCandidateNavigationKey(Global::Keycode) || arrow_moves_selection) && !is_v_mode_input_key)
     {
         auto &ui = Global::candidate_ui;
         UINT result = Global::DataFromServerMsgType::NavigationIgnored;
@@ -1781,6 +1808,17 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         else if (Global::Keycode == VK_NEXT && GetConfiguredPagingPageUpDownEnabled())
         {
             move_page(1, Global::DataFromServerMsgType::MovePageNext);
+        }
+        else if (arrow_moves_selection)
+        {
+            if (Global::Keycode == VK_LEFT)
+            {
+                move_selection(-1, Global::DataFromServerMsgType::MoveSelectionPrevious);
+            }
+            else
+            {
+                move_selection(1, Global::DataFromServerMsgType::MoveSelectionNext);
+            }
         }
         else if (GetConfiguredCandidateArrowNavigationEnabled() &&
                  (Global::Keycode == VK_UP || Global::Keycode == VK_DOWN))

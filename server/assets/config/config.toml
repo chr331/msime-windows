@@ -51,6 +51,8 @@ paging_page_up_down = true
 # 依赖 Windows「当我悬停在非活动窗口上方时滚动它们」，该系统设置关闭时本项不生效
 paging_mouse_wheel = false
 candidate_arrow_navigation = true
+# 横排候选时左右方向键移动高亮：光标在拼音串尾时右键移高亮，左键回到第一个候选后再按才移动光标（默认关闭）
+candidate_horizontal_arrow_navigation = false
 # 中文输入状态下显示英文前缀候选
 cn_en_mixed_input = true
 # 中英混输触发所需的最少字母数，范围 1–8

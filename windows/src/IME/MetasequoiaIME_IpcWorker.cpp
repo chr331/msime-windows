@@ -415,7 +415,8 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::CapsLockChanged ||
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::TsfDiagnosticLogChanged ||
              buf.msg_type == Global::DataToTsfWorkerThreadMsgType::StatisticsEnabledChanged ||
-             buf.msg_type == Global::DataToTsfWorkerThreadMsgType::AiContextUploadChanged))
+             buf.msg_type == Global::DataToTsfWorkerThreadMsgType::AiContextUploadChanged ||
+             buf.msg_type == Global::DataToTsfWorkerThreadMsgType::HorizontalArrowSelectionChanged))
         {
             bool hasTerminator = false;
             for (const wchar_t ch : buf.data)
@@ -517,6 +518,7 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MidSentenceHelpcodeUppercaseChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EndHelpcodeTriggersChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EnumerationCommaKeysChanged ||
+                buf.msg_type == Global::DataToTsfWorkerThreadMsgType::HorizontalArrowSelectionChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::InputModeChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::TrilingualCycleChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::CapsLockChanged ||
@@ -640,6 +642,10 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
         else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::PairedPunctuationChanged)
         {
             Global::PairedPunctuationEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
+        }
+        else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::HorizontalArrowSelectionChanged)
+        {
+            Global::HorizontalArrowSelectionEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
         }
         else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MicrosoftShuangpinChanged)
         {

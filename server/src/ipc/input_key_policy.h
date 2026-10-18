@@ -341,6 +341,23 @@ constexpr bool IsSegmentCaretKey(uint32_t keycode, uint32_t modifiers_down)
            (modifiers_down & kKeyModifierMask) == kModifierControl;
 }
 
+// 横排候选的左右方向键（TSF 打了 FanyImePipeFlags::HorizontalArrowSelection 才会问）：把拼音光标和候选高亮看成
+// 一条线。光标不在串尾时两个键都照常移动光标（右键先回到串尾）；光标在串尾时右键移动高亮，左键在高亮离开第一个
+// 候选时往回移高亮，已经在第一个候选上才去移动光标。selected_index 是高亮在全部候选里的绝对位置。
+constexpr bool ShouldArrowMoveCandidateSelection(uint32_t keycode, bool caret_at_end, int selected_index,
+                                                 int candidate_count) noexcept
+{
+    if (!caret_at_end || candidate_count <= 0)
+    {
+        return false;
+    }
+    if (keycode == kVirtualKeyRight)
+    {
+        return true;
+    }
+    return keycode == kVirtualKeyLeft && selected_index > 0;
+}
+
 // A segment Backspace with nothing left before the caret deletes the last
 // selected segment of the word being created: the accumulated word returns to
 // its pre-selection state and the spelling that segment consumed is discarded

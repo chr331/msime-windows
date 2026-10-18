@@ -90,7 +90,13 @@ enum KEYSTROKE_FUNCTION
 
     // Server-authoritative composition text and language destination.
     FUNCTION_CYCLE_INPUT_MODE,
-    FUNCTION_TOGGLE_ENGLISH_CANDIDATES
+    FUNCTION_TOGGLE_ENGLISH_CANDIDATES,
+
+    // Plain Left / Right while a horizontal candidate window is shown (UsesHorizontalArrowSelection): the Server
+    // either moves the highlight or moves the caret and answers with the authoritative caret. Append-only, like
+    // every function above.
+    FUNCTION_MOVE_LEFT_CANDIDATE,
+    FUNCTION_MOVE_RIGHT_CANDIDATE
 };
 
 //---------------------------------------------------------------------

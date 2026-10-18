@@ -1399,6 +1399,10 @@ HRESULT CMetasequoiaIME::_SetCompositionCaretSelection(TfEditCookie ec, _In_ ITf
 // cannot apply that reply (UILess, an older Server without the negotiated
 // capability, or a missing reply) fall back to the plain single-character move.
 //
+// Plain Left / Right on a horizontal candidate window (FUNCTION_MOVE_*_CANDIDATE)
+// share the reply: the Server either moved the caret (CompositionRestored) or
+// moved the highlight it draws itself, in which case the caret stays put.
+//
 //----------------------------------------------------------------------------
 
 HRESULT CMetasequoiaIME::_HandleCompositionArrowKeySegment(TfEditCookie ec, _In_ ITfContext *pContext,
@@ -1411,8 +1415,11 @@ HRESULT CMetasequoiaIME::_HandleCompositionArrowKeySegment(TfEditCookie ec, _In_
         return S_OK;
     }
 
+    const bool candidateArrow =
+        keyFunction == FUNCTION_MOVE_LEFT_CANDIDATE || keyFunction == FUNCTION_MOVE_RIGHT_CANDIDATE;
     const KEYSTROKE_FUNCTION singleStepFunction =
-        keyFunction == FUNCTION_MOVE_LEFT_SEGMENT ? FUNCTION_MOVE_LEFT : FUNCTION_MOVE_RIGHT;
+        keyFunction == FUNCTION_MOVE_LEFT_SEGMENT || keyFunction == FUNCTION_MOVE_LEFT_CANDIDATE ? FUNCTION_MOVE_LEFT
+                                                                                                 : FUNCTION_MOVE_RIGHT;
 
     if (!Global::IsUiLessMode() && SupportsCompositionRestore() && requestId != FANY_IME_NO_REQUEST_ID)
     {
@@ -1437,6 +1444,15 @@ HRESULT CMetasequoiaIME::_HandleCompositionArrowKeySegment(TfEditCookie ec, _In_
                 }
                 return _SetCompositionCaretSelection(ec, pContext);
             }
+        }
+        if (candidateArrow)
+        {
+            // A highlight move (MoveSelection*) only needs the acknowledgement:
+            // the Server redraws its own candidate window. A missing reply is a
+            // soft miss as for Up / Down -- guessing a caret step here could put
+            // TSF one character away from the Server, which may have moved the
+            // highlight instead.
+            return S_OK;
         }
         // The Server answered with something other than the restored composition,
         // or with nothing at all. This request's reply slot is already consumed

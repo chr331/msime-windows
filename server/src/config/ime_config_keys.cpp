@@ -1,4 +1,5 @@
-// 按键行为配置：翻页键、方向键选词、以词定字、智能标点、配对标点、顿号键与标点锁定，以及发给 TSF 的对应载荷。
+// 按键行为配置：翻页键、方向键选词（含横排左右键）、以词定字、智能标点、配对标点、顿号键与标点锁定，
+// 以及发给 TSF 的对应载荷。
 #include "config/ime_config_internal.h"
 #include <string>
 #include "engine/contracts/enumeration_comma.h"
@@ -123,6 +124,26 @@ bool SetConfiguredCandidateArrowNavigationEnabled(bool enabled)
     }
     g_candidate_arrow_navigation_enabled = enabled;
     return true;
+}
+
+bool GetConfiguredCandidateHorizontalArrowNavigationEnabled()
+{
+    return g_candidate_horizontal_arrow_navigation_enabled;
+}
+
+bool SetConfiguredCandidateHorizontalArrowNavigationEnabled(bool enabled)
+{
+    if (!WriteConfiguredValue("general", "candidate_horizontal_arrow_navigation", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_candidate_horizontal_arrow_navigation_enabled = enabled;
+    return true;
+}
+
+std::wstring FormatHorizontalArrowSelectionWorkerPayload()
+{
+    return g_candidate_horizontal_arrow_navigation_enabled && g_candidate_window_layout == "horizontal" ? L"1" : L"0";
 }
 
 bool GetConfiguredWordToCharacterEnabled()

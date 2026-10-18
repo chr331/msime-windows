@@ -384,7 +384,8 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"paging_tab", GetConfiguredPagingTabEnabled()},
             {"paging_page_up_down", GetConfiguredPagingPageUpDownEnabled()},
             {"paging_mouse_wheel", GetConfiguredPagingMouseWheelEnabled()},
-            {"candidate_arrow_navigation", GetConfiguredCandidateArrowNavigationEnabled()}}},
+            {"candidate_arrow_navigation", GetConfiguredCandidateArrowNavigationEnabled()},
+            {"candidate_horizontal_arrow_navigation", GetConfiguredCandidateHorizontalArrowNavigationEnabled()}}},
           {"association",
            {{"sentence_wordlattice", GetConfiguredAssocSentenceWordLattice()},
             {"sentence_google", GetConfiguredAssocSentenceGoogle()},
@@ -879,6 +880,8 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredPagingMouseWheelEnabled(json::value_to<bool>(data.at("value")));
     if (path == "general.candidate_arrow_navigation")
         return SetConfiguredCandidateArrowNavigationEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "general.candidate_horizontal_arrow_navigation")
+        return SetConfiguredCandidateHorizontalArrowNavigationEnabled(json::value_to<bool>(data.at("value")));
     if (path == "keybindings.switch_language_shift")
         return SetConfiguredSwitchLanguageShiftEnabled(json::value_to<bool>(data.at("value")));
     if (path == "keybindings.switch_language_ctrl")

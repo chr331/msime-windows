@@ -238,6 +238,7 @@ extern bool g_paging_tab_enabled;
 extern bool g_paging_page_up_down_enabled;
 extern bool g_paging_mouse_wheel_enabled;
 extern bool g_candidate_arrow_navigation_enabled;
+extern bool g_candidate_horizontal_arrow_navigation_enabled;
 extern bool g_word_to_character_enabled;
 extern std::string g_word_to_character_keys;
 extern bool g_smart_punctuation_enabled;

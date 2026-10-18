@@ -53,6 +53,9 @@ bool MarkNamedpipeSessionDirtyForOwner(_In_ const void *owner);
 bool EnsureNamedpipeFocusSessionActivated();
 bool SupportsCharacterSetShortcut();
 bool SupportsCompositionRestore();
+// 候选态下的普通左右键交给 Server 决定移高亮还是移光标：Server 打开了横排左右键选词、协商过 CompositionRestore
+// （光标移动要靠它的回复落地），且不是 UILess 宿主。
+bool UsesHorizontalArrowSelection();
 bool SupportsCaretStateIndicator();
 bool SupportsTrilingualCycle();
 bool SupportsInputStateShortcuts();
@@ -283,6 +286,9 @@ inline std::atomic_bool PairedPunctuationEnabled{true};
 // 中文标点下出顿号的键，FanyImeEnumerationComma::kBackslash / kSlash 的组合。Server 连上之前（以及不发这个
 // 消息的旧 Server）保持历史行为：只有 \。规则见 engine/contracts/enumeration_comma.h。
 inline std::atomic<unsigned> EnumerationCommaKeys{FanyImeEnumerationComma::kLegacyKeys};
+// 横排候选时左右方向键移动高亮（Server 发 HorizontalArrowSelectionChanged）。开着时候选态下的左右键交给 Server
+// 决定移高亮还是移光标，TSF 只应用回复；Server 连上之前和旧 Server 都是关，左右键照旧本地移光标。
+inline std::atomic_bool HorizontalArrowSelectionEnabled{false};
 inline std::atomic_bool MicrosoftShuangpinEnabled{false};
 // 双拼句中辅助码开着、勾了反引号且当前是双拼：组合中的反引号按
 // engine/contracts/mid_sentence_helpcode.h 的形状规则当编码键吃掉，见 CompositionProcessorEngine_KeyClassify.cpp。

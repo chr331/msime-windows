@@ -1094,15 +1094,18 @@ VisualPtr BuildShortcutPage(PageContext &context)
     // 翻页方式
     {
         auto column = std::make_shared<Column>(0.0f);
-        column->Add(Heading(L"翻页方式", L"勾选启用对应的候选翻页键。滚轮翻页依赖系统设置「当我悬停在非活动窗口上方时"
-                                         L"滚动它们」，该项关闭时滚轮不会到达候选窗口"));
-        column->Add(Options({BindCheck(context, L"- / =", "general.paging_minus_equal"),
-                             BindCheck(context, L", / .", "general.paging_comma_period"),
-                             BindCheck(context, L"[ / ]", "general.paging_brackets"),
-                             BindCheck(context, L"Shift+Tab / Tab", "general.paging_tab"),
-                             BindCheck(context, L"PageUp / PageDown", "general.paging_page_up_down"),
-                             BindCheck(context, L"上 / 下（移动候选项）", "general.candidate_arrow_navigation"),
-                             BindCheck(context, L"鼠标滚轮", "general.paging_mouse_wheel")}));
+        column->Add(Heading(L"翻页方式", L"勾选启用对应的候选翻页键。左 / 右只在候选窗为横排时生效：光标在拼音末尾时"
+                                         L"右键移动高亮，左键回到第一个候选后再按才移动光标。滚轮翻页依赖系统设置"
+                                         L"「当我悬停在非活动窗口上方时滚动它们」，该项关闭时滚轮不会到达候选窗口"));
+        column->Add(Options(
+            {BindCheck(context, L"- / =", "general.paging_minus_equal"),
+             BindCheck(context, L", / .", "general.paging_comma_period"),
+             BindCheck(context, L"[ / ]", "general.paging_brackets"),
+             BindCheck(context, L"Shift+Tab / Tab", "general.paging_tab"),
+             BindCheck(context, L"PageUp / PageDown", "general.paging_page_up_down"),
+             BindCheck(context, L"上 / 下（移动候选项）", "general.candidate_arrow_navigation"),
+             BindCheck(context, L"左 / 右（横排时移动候选项）", "general.candidate_horizontal_arrow_navigation"),
+             BindCheck(context, L"鼠标滚轮", "general.paging_mouse_wheel")}));
         page.AddRaw(std::make_shared<FlatSection>(column), 18.0f);
     }
 

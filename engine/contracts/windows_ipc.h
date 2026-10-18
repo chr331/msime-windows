@@ -158,6 +158,12 @@ constexpr std::uint32_t ImeSwitchCapsSnapshotEnabled = 0x20000000u;
 // receive it because the DLL only sets it after the new opcode turned it on.
 // 0x10000000..0x04000000 belong to FanyImeTrilingualInput.
 constexpr std::uint32_t SensitiveField = 0x02000000u;
+// KeyEvent only, plain Left / Right while candidates are shown: the DLL asks the Server to decide between moving
+// the candidate highlight and moving the composition caret (horizontal candidate window, see
+// HorizontalArrowSelectionChanged). The Server answers a highlight move with MoveSelectionPrevious / MoveSelectionNext
+// and a caret move with CompositionRestored carrying the caret. The DLL only sets it after the Server turned the
+// feature on and CompositionRestore was negotiated; the Server strips it before any key-modifier policy runs.
+constexpr std::uint32_t HorizontalArrowSelection = 0x01000000u;
 
 constexpr std::uint32_t EncodeImeSwitchCapsLockSnapshot(bool enabled)
 {
@@ -336,7 +342,8 @@ constexpr std::uint32_t ProtocolMismatch = 13;
 // The Server retracted or repositioned an in-progress word and restored its raw
 // pinyin: this is the authoritative reply for the retraction (Backspace), the
 // unit deletion (Ctrl+Backspace) and the unit caret move (Ctrl+Left /
-// Ctrl+Right). candidate_string =
+// Ctrl+Right), and for a plain Left / Right sent with
+// FanyImePipeFlags::HorizontalArrowSelection that moved the caret. candidate_string =
 //   remaining_raw \t committed_word \t display_preedit [\t caret]
 // caret is an optional decimal offset into remaining_raw; a 3-field payload
 // means "caret at the end". NeedToCreateWord and CompositionRestored share the
@@ -467,7 +474,12 @@ constexpr std::uint32_t EndHelpcodeTriggersChanged = 37;
 // FanyImeEnumerationComma::PayloadFor: bit 1 '\', bit 2 '/'. A key whose bit is clear is not Chinese punctuation and
 // passes through as itself. Older DLLs ignore the opcode and keep '\' only.
 constexpr std::uint32_t EnumerationCommaKeysChanged = 38;
-constexpr std::uint32_t MaxKnown = EnumerationCommaKeysChanged;
+// Whether plain Left / Right move the candidate highlight while the candidate window is horizontal. Payload "0"/"1":
+// "1" only when the setting is on and the configured layout is horizontal. With it on the DLL sends those keys with
+// FanyImePipeFlags::HorizontalArrowSelection and applies the Server's answer instead of moving the caret itself.
+// Older DLLs ignore the opcode and keep moving the caret.
+constexpr std::uint32_t HorizontalArrowSelectionChanged = 39;
+constexpr std::uint32_t MaxKnown = HorizontalArrowSelectionChanged;
 // Source compatibility for the Server's historical spellings.
 constexpr std::uint32_t SwitchToEn = SwitchToEnglish;
 constexpr std::uint32_t SwitchToCn = SwitchToChinese;

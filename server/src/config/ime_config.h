@@ -605,6 +605,12 @@ bool GetConfiguredPagingMouseWheelEnabled();
 bool SetConfiguredPagingMouseWheelEnabled(bool enabled);
 bool GetConfiguredCandidateArrowNavigationEnabled();
 bool SetConfiguredCandidateArrowNavigationEnabled(bool enabled);
+// 横排候选时左右方向键移动高亮（general.candidate_horizontal_arrow_navigation），默认关；
+// 只在候选窗布局为 horizontal 时生效，生效与否经 HorizontalArrowSelectionChanged 发给 TSF。
+bool GetConfiguredCandidateHorizontalArrowNavigationEnabled();
+bool SetConfiguredCandidateHorizontalArrowNavigationEnabled(bool enabled);
+// Worker payload for HorizontalArrowSelectionChanged: "1" when the setting is on and the layout is horizontal.
+std::wstring FormatHorizontalArrowSelectionWorkerPayload();
 bool GetConfiguredWordToCharacterEnabled();
 bool SetConfiguredWordToCharacterEnabled(bool enabled);
 std::string GetConfiguredWordToCharacterKeys();

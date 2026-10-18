@@ -466,6 +466,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 GetConfiguredSmartPunctuationRepeatToChineseEnabled();
             const bool previous_paired_punctuation = GetConfiguredPairedPunctuationEnabled();
             const std::wstring previous_enumeration_comma = FormatEnumerationCommaWorkerPayload();
+            const std::wstring previous_horizontal_arrow_selection = FormatHorizontalArrowSelectionWorkerPayload();
             const std::string previous_punctuation_lock = GetConfiguredPunctuationLock();
             const bool previous_tsf_diagnostic_log = GetConfiguredTsfDiagnosticLogEnabled();
             const bool previous_statistics_enabled = GetConfiguredStatisticsEnabled();
@@ -620,6 +621,13 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                     BroadcastToTsfWorkerThreadViaNamedpipe(
                         Global::DataFromServerMsgTypeToTsfWorkerThread::EnumerationCommaKeysChanged,
                         FormatEnumerationCommaWorkerPayload());
+                }
+                // 开关和候选窗布局任一变化都可能改变生效状态。
+                if (previous_horizontal_arrow_selection != FormatHorizontalArrowSelectionWorkerPayload())
+                {
+                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                        Global::DataFromServerMsgTypeToTsfWorkerThread::HorizontalArrowSelectionChanged,
+                        FormatHorizontalArrowSelectionWorkerPayload());
                 }
                 if (previous_punctuation_lock != GetConfiguredPunctuationLock())
                 {

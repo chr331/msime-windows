@@ -342,7 +342,15 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed( //
         if (pKeyState)
         {
             pKeyState->Category = CATEGORY_COMPOSING;
-            pKeyState->Function = uCode == VK_LEFT ? FUNCTION_MOVE_LEFT : FUNCTION_MOVE_RIGHT;
+            // 横排候选左右键选词开着时，移高亮还是移光标由 Server 定，TSF 只应用它的回复。
+            if (UsesHorizontalArrowSelection())
+            {
+                pKeyState->Function = uCode == VK_LEFT ? FUNCTION_MOVE_LEFT_CANDIDATE : FUNCTION_MOVE_RIGHT_CANDIDATE;
+            }
+            else
+            {
+                pKeyState->Function = uCode == VK_LEFT ? FUNCTION_MOVE_LEFT : FUNCTION_MOVE_RIGHT;
+            }
         }
         return TRUE;
     }

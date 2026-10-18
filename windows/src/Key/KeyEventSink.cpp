@@ -1366,6 +1366,23 @@ CMetasequoiaIME::KeyDownDispatchResult CMetasequoiaIME::_DispatchKeyDown(
         Global::Keycode = code;
         Global::wch = wch;
         Global::ModifiersDown = capturedModifiers;
+        if (KeystrokeState.Function == FUNCTION_MOVE_LEFT_CANDIDATE ||
+            KeystrokeState.Function == FUNCTION_MOVE_RIGHT_CANDIDATE)
+        {
+            // The flag is what makes the Server answer with the caret or the
+            // highlight move. Re-check here: a reconnect or a settings change
+            // since classification falls back to the plain local caret move on
+            // both sides instead of waiting for a reply that never comes.
+            if (UsesHorizontalArrowSelection())
+            {
+                Global::ModifiersDown |= FanyImePipeFlags::HorizontalArrowSelection;
+            }
+            else
+            {
+                KeystrokeState.Function =
+                    KeystrokeState.Function == FUNCTION_MOVE_LEFT_CANDIDATE ? FUNCTION_MOVE_LEFT : FUNCTION_MOVE_RIGHT;
+            }
+        }
         if (KeystrokeState.Function == FUNCTION_CYCLE_INPUT_MODE)
         {
             // Mark the request explicitly and carry this host's own state: the

@@ -45,7 +45,7 @@ int main()
     CHECK((FanyImeProtocol::Negotiate(FanyImeProtocol::Hello(7, 124), rCapabilities).capabilities &
            FanyImeProtocol::TemporaryJapaneseLongVowel) == 0);
     CHECK(FanyImeWorkerReplyType::TemporaryJapanesePolicyChanged == 36);
-    CHECK(FanyImeWorkerReplyType::MaxKnown == 38);
+    CHECK(FanyImeWorkerReplyType::MaxKnown == 39);
     for (wchar_t payload = L'0'; payload <= L'3'; ++payload)
     {
         CHECK(FanyImeTemporaryJapanese::IsValidPayload(payload));
@@ -241,7 +241,8 @@ int main()
     CHECK(FanyImeWorkerReplyType::TemporaryJapanesePolicyChanged == 36);
     CHECK(FanyImeWorkerReplyType::EndHelpcodeTriggersChanged == 37);
     CHECK(FanyImeWorkerReplyType::EnumerationCommaKeysChanged == 38);
-    CHECK(FanyImeWorkerReplyType::MaxKnown == FanyImeWorkerReplyType::EnumerationCommaKeysChanged);
+    CHECK(FanyImeWorkerReplyType::HorizontalArrowSelectionChanged == 39);
+    CHECK(FanyImeWorkerReplyType::MaxKnown == FanyImeWorkerReplyType::HorizontalArrowSelectionChanged);
     // EnumerationCommaKeysChanged 的载荷：\ 和 / 各一位，两个都没勾按只有 \ 发。
     CHECK(FanyImeEnumerationComma::PayloadFor(true, false) == L'1' &&
           FanyImeEnumerationComma::PayloadFor(false, true) == L'2' &&
@@ -269,6 +270,12 @@ int main()
     CHECK((FanyImePipeFlags::SensitiveField &
            (FanyImePipeFlags::UiLess | FanyImePipeFlags::ImeSwitchCapsSnapshotPresent |
             FanyImePipeFlags::ImeSwitchCapsSnapshotEnabled | FanyImeTrilingualInput::CycleRequestMask)) == 0);
+    // Same for the horizontal arrow selection flag, which also stays clear of the sensitive-field bit.
+    CHECK((FanyImePipeFlags::HorizontalArrowSelection & 7u) == 0);
+    CHECK((FanyImePipeFlags::HorizontalArrowSelection &
+           (FanyImePipeFlags::UiLess | FanyImePipeFlags::ImeSwitchCapsSnapshotPresent |
+            FanyImePipeFlags::ImeSwitchCapsSnapshotEnabled | FanyImeTrilingualInput::CycleRequestMask |
+            FanyImePipeFlags::SensitiveField)) == 0);
     // V 模式的形状规则，TSF（WCHAR）与 Server（char）共用。
     {
         using FanyImeVModeInput::Trigger;

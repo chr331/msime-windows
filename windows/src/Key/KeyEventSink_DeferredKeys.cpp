@@ -133,7 +133,10 @@ void ApplyDeferredKeyState(DeferredShadowState &shadow, const _KEYSTROKE_STATE &
     case FUNCTION_BACKSPACE_SEGMENT:
     case FUNCTION_MOVE_LEFT_SEGMENT:
     case FUNCTION_MOVE_RIGHT_SEGMENT:
-        // How much one unit covers is Server-owned, so the future raw and caret
+    case FUNCTION_MOVE_LEFT_CANDIDATE:
+    case FUNCTION_MOVE_RIGHT_CANDIDATE:
+        // How much one unit covers is Server-owned, as is whether a candidate
+        // arrow moves the highlight or the caret, so the future raw and caret
         // cannot be predicted here. Invalidate the projection instead of
         // advancing it by one character; the next key re-reads the real
         // composition.
@@ -659,9 +662,14 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
         case VK_ESCAPE:
             return setKeyState(CATEGORY_CANDIDATE, FUNCTION_CANCEL);
         case VK_LEFT:
-            return setKeyState(CATEGORY_COMPOSING, FUNCTION_MOVE_LEFT);
+            // 与同步路径一致：候选态下横排左右键选词开着时交给 Server 定。
+            return setKeyState(CATEGORY_COMPOSING, candidateKey && UsesHorizontalArrowSelection()
+                                                       ? FUNCTION_MOVE_LEFT_CANDIDATE
+                                                       : FUNCTION_MOVE_LEFT);
         case VK_RIGHT:
-            return setKeyState(CATEGORY_COMPOSING, FUNCTION_MOVE_RIGHT);
+            return setKeyState(CATEGORY_COMPOSING, candidateKey && UsesHorizontalArrowSelection()
+                                                       ? FUNCTION_MOVE_RIGHT_CANDIDATE
+                                                       : FUNCTION_MOVE_RIGHT);
         case VK_HOME:
             return setKeyState(CATEGORY_CANDIDATE, FUNCTION_MOVE_PAGE_TOP);
         case VK_END:

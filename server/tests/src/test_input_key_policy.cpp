@@ -301,6 +301,27 @@ TEST_CASE(segment_caret_move_is_ctrl_only)
     REQUIRE(!IsSegmentCaretKey('A', FanyImeIpc::kModifierControl));
 }
 
+TEST_CASE(horizontal_arrow_moves_highlight_only_from_the_end_of_the_spelling)
+{
+    using FanyImeIpc::kVirtualKeyLeft;
+    using FanyImeIpc::kVirtualKeyRight;
+    using FanyImeIpc::ShouldArrowMoveCandidateSelection;
+    // 光标在串尾：右键总是移高亮（到最后一个候选时由选词逻辑原地不动），左键离开第一个候选才移高亮。
+    REQUIRE(ShouldArrowMoveCandidateSelection(kVirtualKeyRight, true, 0, 5));
+    REQUIRE(ShouldArrowMoveCandidateSelection(kVirtualKeyRight, true, 4, 5));
+    REQUIRE(ShouldArrowMoveCandidateSelection(kVirtualKeyLeft, true, 1, 5));
+    // 跨页之后的高亮按绝对位置算，第二页第一个候选左移回到第一页。
+    REQUIRE(ShouldArrowMoveCandidateSelection(kVirtualKeyLeft, true, 8, 20));
+    // 已在第一个候选：左键交给光标。
+    REQUIRE(!ShouldArrowMoveCandidateSelection(kVirtualKeyLeft, true, 0, 5));
+    // 光标在串中间：右键先把光标移回串尾，左键继续移光标。
+    REQUIRE(!ShouldArrowMoveCandidateSelection(kVirtualKeyRight, false, 0, 5));
+    REQUIRE(!ShouldArrowMoveCandidateSelection(kVirtualKeyLeft, false, 3, 5));
+    // 没有候选时两个键都是光标键。
+    REQUIRE(!ShouldArrowMoveCandidateSelection(kVirtualKeyRight, true, 0, 0));
+    REQUIRE(!ShouldArrowMoveCandidateSelection('A', true, 1, 5));
+}
+
 TEST_CASE(segment_caret_boundaries_stop_at_the_unit_next_to_the_caret)
 {
     using FanyImeIpc::NextSegmentBoundary;

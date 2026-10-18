@@ -986,6 +986,12 @@ bool SupportsCompositionRestore()
            (negotiatedServerCapabilities & FanyImeProtocol::CompositionRestore) != 0;
 }
 
+bool UsesHorizontalArrowSelection()
+{
+    return Global::HorizontalArrowSelectionEnabled.load(std::memory_order_relaxed) && !Global::IsUiLessMode() &&
+           SupportsCompositionRestore();
+}
+
 bool SupportsCaretStateIndicator()
 {
     return hPipe && hPipe != INVALID_HANDLE_VALUE &&
