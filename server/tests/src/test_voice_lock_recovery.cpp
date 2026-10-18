@@ -121,6 +121,7 @@ VoiceInputConfig g_config;
 bool g_block_next_config_read = false;
 bool g_config_read_entered = false;
 bool g_config_read_release = false;
+std::atomic<int> g_config_read_count{0};
 
 void SetConfig(const VoiceInputConfig &config)
 {
@@ -147,6 +148,11 @@ void ReleaseConfigRead()
     std::lock_guard<std::mutex> lock(g_config_mutex);
     g_config_read_release = true;
     g_config_cv.notify_all();
+}
+
+bool WaitConfigReadAfter(int previous)
+{
+    return WaitFor([previous] { return g_config_read_count.load() > previous; });
 }
 
 VoiceInputConfig TestConfig(bool enabled, bool hotkeys)
@@ -262,32 +268,6 @@ void StartGesture(Gesture gesture)
     REQUIRE(WaitCaptureEntered());
 }
 
-constexpr UINT kLockRecordingCommandMessage = WM_APP + 184;
-
-HWND VoiceMessageWindow()
-{
-    const DWORD process_id = GetCurrentProcessId();
-    const DWORD thread_id = GetCurrentThreadId();
-    HWND window = FindWindowExW(HWND_MESSAGE, nullptr, L"MetasequoiaImeVoiceInputMessageWindow", nullptr);
-    while (window)
-    {
-        DWORD window_process_id = 0;
-        const DWORD window_thread_id = GetWindowThreadProcessId(window, &window_process_id);
-        if (window_process_id == process_id && window_thread_id == thread_id)
-            return window;
-        window = FindWindowExW(HWND_MESSAGE, window, L"MetasequoiaImeVoiceInputMessageWindow", nullptr);
-    }
-    return nullptr;
-}
-
-void QueueLockCommand()
-{
-    const HWND window = VoiceMessageWindow();
-    REQUIRE(window != nullptr);
-    REQUIRE(PostMessageW(window, kLockRecordingCommandMessage, 0, 0) != FALSE);
-    PumpMessages();
-}
-
 void ReleaseTestKeys()
 {
     KeyUp(VK_RMENU, true);
@@ -387,19 +367,59 @@ TEST_CASE(failed_start_with_queued_lock_does_not_lock_next_gesture)
     SetConfig(TestConfig(false, true));
     BlockNextConfigRead();
 
+    // The public Start (not a hook call) takes the config gate.
     VoiceInput::StartRecording();
     REQUIRE(WaitConfigReadEntered());
-    QueueLockCommand();
-    ReleaseConfigRead();
 
+    ResetCapture();
+    BeginGesture(Gesture::RAlt); // queues a second, disabled Start
+    PumpMessages();
+    PressSpace(); // pending ticket
+    PumpMessages();
+    const int before_release = g_config_read_count.load();
+    ReleaseConfigRead();
+    // The queued Start reads the disabled config first; the Lock follows it.
+    REQUIRE(WaitConfigReadAfter(before_release));
+
+    // A Start queued after the Lock reaches the same read only after the Lock
+    // has run, so this wait crosses the queue execution point in order.
+    const int before_sentinel = g_config_read_count.load();
+    VoiceInput::StartRecording();
+    REQUIRE(WaitConfigReadAfter(before_sentinel));
+    EndGesture(Gesture::RAlt);
     SetConfig(TestConfig(true, true));
+
+    for (int i = 0; i < 3; ++i)
+    {
+        StartGesture(Gesture::RAlt);
+        AllowCaptureStart();
+        REQUIRE(WaitRecording());
+        const int stop_before = CaptureStopCount();
+        const int hides_before = g_hide_count.load();
+        EndGesture(Gesture::RAlt);
+        REQUIRE(WaitNormalStop(stop_before, hides_before));
+        REQUIRE(!VoiceInput::IsRecording());
+    }
+}
+
+// Cancelling a starting capture must invalidate its own queued Lock before a
+// new Start exists. The stale Lock arriving after that Start must not lock the
+// new recording, and the next hold must start rather than post Stop.
+TEST_CASE(external_cancel_with_queued_lock_does_not_lock_next_gesture)
+{
+    ServiceFixture fixture;
     StartGesture(Gesture::RAlt);
-    AllowCaptureStart();
+
+    PressSpace();                  // pending ticket; Lock message not dispatched
+    VoiceInput::CancelRecording(); // carries that ticket
+    VoiceInput::StartRecording();  // new Start before the old Lock is dispatched
+    PumpMessages();                // dispatch the old Lock behind the new Start
+    const int stop_before = CaptureStopCount();
+    AllowCaptureStart(); // abort first Start, cancel, then start again
     REQUIRE(WaitRecording());
 
-    const int stop_before = CaptureStopCount();
     const int hides_before = g_hide_count.load();
-    EndGesture(Gesture::RAlt);
+    EndGesture(Gesture::RAlt); // the stale Lock must not keep this locked
     REQUIRE(WaitNormalStop(stop_before, hides_before));
     REQUIRE(!VoiceInput::IsRecording());
 
@@ -412,36 +432,6 @@ TEST_CASE(failed_start_with_queued_lock_does_not_lock_next_gesture)
         const int loop_hides = g_hide_count.load();
         EndGesture(Gesture::RAlt);
         REQUIRE(WaitNormalStop(loop_stop, loop_hides));
-        REQUIRE(!VoiceInput::IsRecording());
-    }
-}
-
-// Cancelling a starting capture must not leave its queued Lock behind. The
-// next hold has to start, not post Stop.
-TEST_CASE(external_cancel_with_queued_lock_does_not_lock_next_gesture)
-{
-    ServiceFixture fixture;
-    ResetCapture();
-    VoiceInput::StartRecording();
-    REQUIRE(WaitCaptureEntered());
-    QueueLockCommand();
-
-    const int hides_before = g_hide_count.load();
-    VoiceInput::CancelRecording();
-    PumpMessages();
-    AllowCaptureStart();
-    REQUIRE(WaitFor([hides_before] { return g_hide_count.load() > hides_before; }));
-    REQUIRE(!VoiceInput::IsRecording());
-
-    for (int i = 0; i < 2; ++i)
-    {
-        StartGesture(Gesture::RAlt);
-        AllowCaptureStart();
-        REQUIRE(WaitRecording());
-        const int stop_before = CaptureStopCount();
-        const int gesture_hides = g_hide_count.load();
-        EndGesture(Gesture::RAlt);
-        REQUIRE(WaitNormalStop(stop_before, gesture_hides));
         REQUIRE(!VoiceInput::IsRecording());
     }
 }
@@ -508,6 +498,161 @@ TEST_CASE(hold_shortcuts_share_gesture_lifecycle)
     }
 }
 
+// A Lock still waiting in the message queue is a real request: the next hold
+// must end that recording instead of starting another one.
+TEST_CASE(pending_lock_makes_next_hold_stop)
+{
+    ServiceFixture fixture;
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+
+    PressSpace();              // pending; do not dispatch the Lock yet
+    EndGesture(Gesture::RAlt); // pending must not be cancelled on release
+    const int stop_before = CaptureStopCount();
+    const int hides_before = g_hide_count.load();
+
+    BeginGesture(Gesture::RAlt); // pending -> Stop, not Start
+    PumpMessages();              // Lock then Stop
+    REQUIRE(WaitNormalStop(stop_before, hides_before));
+    REQUIRE(!VoiceInput::IsRecording());
+    EndGesture(Gesture::RAlt);
+
+    // A fresh hold starts and stops normally.
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+    const int next_stop = CaptureStopCount();
+    const int next_hides = g_hide_count.load();
+    EndGesture(Gesture::RAlt);
+    REQUIRE(WaitNormalStop(next_stop, next_hides));
+    REQUIRE(!VoiceInput::IsRecording());
+}
+
+// A Stop created for an older request must not clear a newer pending Space
+// request when it is finally executed before that request's Lock.
+TEST_CASE(stale_stop_does_not_clear_next_space_request)
+{
+    ServiceFixture fixture;
+    StartGesture(Gesture::RAlt); // first Start is gated in capture.start()
+
+    PressSpace();                    // pending T1
+    PumpMessages();                  // Lock T1 queued behind the blocked Start
+    VoiceInput::StopRecording();     // Stop T1, still queued behind the Start
+    VoiceInput::SetImeActive(false); // resets all lock state; queues Cancel 0
+    VoiceInput::SetImeActive(true);
+    ResetObservations();
+
+    BeginGesture(Gesture::RAlt); // state 0 -> Start
+    PressSpace();                // pending T2
+    PumpMessages();              // dispatch Start and Lock T2
+    AllowCaptureStart();         // abort first Start, then Cancel, Start, Lock
+
+    REQUIRE(WaitRecording());
+    REQUIRE(WaitFor([] { return g_actions_true_count.load() >= 2; }));
+    REQUIRE(g_actions_visible.load());
+
+    const int stop_before = CaptureStopCount();
+    const int hides_before = g_hide_count.load();
+    EndGesture(Gesture::RAlt); // applied lock: release must not stop
+
+    // The lock is still applied, so the next hold ends the recording instead
+    // of starting another one; its stop completion is the evidence.
+    BeginGesture(Gesture::RAlt);
+    PumpMessages();
+    REQUIRE(WaitNormalStop(stop_before, hides_before));
+    REQUIRE(!VoiceInput::IsRecording());
+    EndGesture(Gesture::RAlt);
+
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+    const int next_stop = CaptureStopCount();
+    const int next_hides = g_hide_count.load();
+    EndGesture(Gesture::RAlt);
+    REQUIRE(WaitNormalStop(next_stop, next_hides));
+    REQUIRE(!VoiceInput::IsRecording());
+}
+
+// Switching IMEs while a Space-locked start is still initializing must abort
+// that start instead of committing the recording after deactivation.
+TEST_CASE(ime_deactivation_cancels_pending_space_locked_start)
+{
+    ServiceFixture fixture;
+    StartGesture(Gesture::RAlt);
+
+    PressSpace();
+    PumpMessages();
+    EndGesture(Gesture::RAlt);
+    PumpMessages();
+    const int stop_before = CaptureStopCount();
+    VoiceInput::SetImeActive(false);
+    AllowCaptureStart();
+    REQUIRE(WaitFor([stop_before] { return CaptureStopCount() > stop_before; }));
+    REQUIRE(!VoiceInput::IsRecording());
+}
+
+// Disabling voice input while a Space-locked start is still initializing must
+// abort that start, and the next hold must work after re-enabling it.
+TEST_CASE(refresh_disabled_aborts_starting_space_locked_capture)
+{
+    ServiceFixture fixture;
+    StartGesture(Gesture::RAlt);
+
+    PressSpace();
+    PumpMessages();
+    EndGesture(Gesture::RAlt); // pending lock: release posts no Stop
+
+    SetConfig(TestConfig(false, true));
+    const int stop_before = CaptureStopCount();
+    VoiceInput::RefreshKeyboardHook();
+    AllowCaptureStart();
+    REQUIRE(WaitFor([stop_before] { return CaptureStopCount() > stop_before; }));
+    REQUIRE(!VoiceInput::IsRecording());
+
+    SetConfig(TestConfig(true, true));
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+    const int next_stop = CaptureStopCount();
+    const int next_hides = g_hide_count.load();
+    EndGesture(Gesture::RAlt);
+    REQUIRE(WaitNormalStop(next_stop, next_hides));
+    REQUIRE(!VoiceInput::IsRecording());
+}
+
+// A lock from the previous hold must be gone before Ctrl+F9 restarts within
+// the same physical hold, so releasing the key stops the new recording.
+TEST_CASE(ctrl_f9_restart_with_held_shortcut_stops_on_release)
+{
+    ServiceFixture fixture;
+    StartGesture(Gesture::RAlt);
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+
+    PressSpace();
+    PumpMessages();
+    REQUIRE(WaitFor([] { return g_actions_true_count.load() >= 2; }));
+
+    const int first_stop = CaptureStopCount();
+    const int first_hides = g_hide_count.load();
+    PressCtrlF9();
+    REQUIRE(WaitNormalStop(first_stop, first_hides));
+    REQUIRE(!VoiceInput::IsRecording());
+
+    ResetCapture();
+    PressCtrlF9();
+    REQUIRE(WaitCaptureEntered());
+    AllowCaptureStart();
+    REQUIRE(WaitRecording());
+
+    const int second_stop = CaptureStopCount();
+    const int second_hides = g_hide_count.load();
+    EndGesture(Gesture::RAlt);
+    REQUIRE(WaitNormalStop(second_stop, second_hides));
+    REQUIRE(!VoiceInput::IsRecording());
+}
+
 namespace test
 {
 std::vector<TestCase> &registry()
@@ -560,6 +705,10 @@ VoiceInputConfig GetConfiguredVoiceInput()
 {
     std::unique_lock<std::mutex> lock(g_config_mutex);
     const VoiceInputConfig snapshot = g_config;
+    // Count only after the snapshot is fixed: a waiter may then change the
+    // config without changing what this read returns.
+    ++g_config_read_count;
+    NotifyEffects();
     if (g_block_next_config_read)
     {
         // Only the control thread's one read is gated; test-thread hook calls
