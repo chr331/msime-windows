@@ -397,6 +397,41 @@ TEST_CASE(horizontal_candidates_are_widened_to_the_minimum_item_width)
     REQUIRE(list.MeasureInLayout({1000.0f, 1000.0f}).width < 90.0f);
 }
 
+TEST_CASE(grid_candidates_share_equal_columns_and_wide_items_span_several)
+{
+    CandidateList list(28.0f);
+    CandidateList::Appearance appearance;
+    appearance.itemHeight = 28.0f;
+    appearance.itemGap = 4.0f;
+    appearance.minItemWidth = 60.0f;
+    appearance.gridColumns = 4;
+    list.SetAppearance(appearance);
+    list.SetOrientation(CandidateList::Orientation::Horizontal);
+    list.SetItems({{L"", L"a", L"", L""},
+                   {L"", L"b", L"", L""},
+                   {L"", L"longer word", L"", L""},
+                   {L"", L"c", L"", L""},
+                   {L"", L"d", L"", L""}});
+    // 316 DIP fits four 60 DIP columns; (316 - 3 * 4) / 4 = 76 each.
+    const SizeF size = list.MeasureInLayout({316.0f, 1000.0f});
+    list.ArrangeInLayout({0.0f, 0.0f, 316.0f, size.height});
+    REQUIRE_NEAR(list.GetItemBounds(0).width, 76.0f);
+    REQUIRE_NEAR(list.GetItemBounds(1).x, 80.0f);
+    // The long item takes whole columns and fits on the first row from the third column on.
+    const RectF wide = list.GetItemBounds(2);
+    REQUIRE_NEAR(wide.x, 160.0f);
+    REQUIRE_NEAR(wide.width, 156.0f);
+    REQUIRE_NEAR(list.GetItemBounds(3).x, 0.0f);
+    REQUIRE(list.GetItemBounds(3).y > 0.0f);
+    REQUIRE_NEAR(list.GetItemBounds(4).x, 80.0f);
+
+    // Narrower than four minimum columns: fewer, still equal, columns.
+    list.MeasureInLayout({200.0f, 1000.0f});
+    list.ArrangeInLayout({0.0f, 0.0f, 200.0f, 1000.0f});
+    REQUIRE_NEAR(list.GetItemBounds(0).width, 64.0f);
+    REQUIRE_NEAR(list.GetItemBounds(1).x, 68.0f);
+}
+
 TEST_CASE(fit_content_candidates_measure_without_minimum_width_or_slack)
 {
     CandidateList list(28.0f);

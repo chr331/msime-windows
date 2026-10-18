@@ -451,6 +451,14 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
         {
             validFrame = FanyImeDirectHelpcode::IsValidPayload(buf.data[0]) && buf.data[1] == L'\0';
         }
+        if (validFrame && buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EndHelpcodeTriggersChanged)
+        {
+            validFrame = FanyImeEndHelpcode::IsValidPayload(buf.data[0]) && buf.data[1] == L'\0';
+        }
+        if (validFrame && buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EnumerationCommaKeysChanged)
+        {
+            validFrame = FanyImeEnumerationComma::IsValidPayload(buf.data[0]) && buf.data[1] == L'\0';
+        }
         if (validFrame && (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::UpdateVoiceComposition ||
                            buf.msg_type == Global::DataToTsfWorkerThreadMsgType::CommitVoiceComposition))
         {
@@ -507,6 +515,8 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MidSentenceHelpcodeSemicolonChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::DirectHelpcodeChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MidSentenceHelpcodeUppercaseChanged ||
+                buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EndHelpcodeTriggersChanged ||
+                buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EnumerationCommaKeysChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::InputModeChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::TrilingualCycleChanged ||
                 buf.msg_type == Global::DataToTsfWorkerThreadMsgType::CapsLockChanged ||
@@ -653,6 +663,16 @@ void CMetasequoiaIME::IpcWorkerThread(CMetasequoiaIME *pIME)
         else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::MidSentenceHelpcodeUppercaseChanged)
         {
             Global::MidSentenceHelpcodeUppercaseEnabled.store(buf.data[0] == L'1', std::memory_order_relaxed);
+        }
+        else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EndHelpcodeTriggersChanged)
+        {
+            Global::EndHelpcodeTriggers.store(FanyImeEndHelpcode::FlagsFromPayload(buf.data[0]),
+                                              std::memory_order_relaxed);
+        }
+        else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::EnumerationCommaKeysChanged)
+        {
+            Global::EnumerationCommaKeys.store(FanyImeEnumerationComma::KeysFromPayload(buf.data[0]),
+                                               std::memory_order_relaxed);
         }
         else if (buf.msg_type == Global::DataToTsfWorkerThreadMsgType::VModeChanged)
         {

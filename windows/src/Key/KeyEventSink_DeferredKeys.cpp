@@ -91,7 +91,7 @@ void ApplyDeferredKeyState(DeferredShadowState &shadow, const _KEYSTROKE_STATE &
         shadow.caret =
             FanyImeTemporaryJapanese::ClampCaret(shadow.japaneseMode, shadow.temporaryJapanesePolicy,
                                                  shadow.rawInput.data(), shadow.rawInput.size(), shadow.caret);
-        // 和真正加入按键缓冲时一样，分号触发的句中辅助码记成反引号。
+        // 和真正加入按键缓冲时一样，分号触发的句中辅助码记成反引号，末尾辅助码的触发键记成 kEndMarker。
         wch = CCompositionProcessorEngine::NormalizeMidSentenceHelpcodeTrigger(wch, shadow.rawInput.data(),
                                                                                shadow.rawInput.size(), shadow.caret);
         if (shadow.rawInput.size() < MAX_PINYIN_LENGTH && wch != L'\0')
@@ -579,12 +579,13 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
             !Global::DirectHelpcodeEnabled.load(std::memory_order_relaxed) && *classifiedCode == VK_OEM_1 &&
             *classifiedWch == L';' && !shadow.rawInput.empty())
         {
-            // 与同步路径同一条规则：大写触发开着时大写段不算这一节的键。
+            // 与同步路径同一条规则：大写触发开着、或缓冲里有末尾段时，段不算这一节的键。
             isInputKey = FanyImeMidSentenceHelpcode::AcceptsSemicolonFinalAt(
                 shadow.rawInput.data(), shadow.rawInput.size(), min(shadow.caret, shadow.rawInput.size()),
-                Global::MidSentenceHelpcodeUppercaseEnabled.load(std::memory_order_relaxed));
+                {Global::MidSentenceHelpcodeUppercaseEnabled.load(std::memory_order_relaxed),
+                 (Global::EndHelpcodeTriggers.load(std::memory_order_relaxed) & FanyImeEndHelpcode::kUppercase) != 0});
         }
-        // 与 CompositionProcessorEngine_KeyClassify.cpp 的句中辅助码判断一致，按影子状态算。
+        // 与 CompositionProcessorEngine_KeyClassify.cpp 的句中辅助码、末尾辅助码（间接）判断一致，按影子状态算。
         if (!isInputKey && !shadow.japaneseMode)
         {
             isInputKey = CCompositionProcessorEngine::IsMidSentenceHelpcodeTriggerKey(
@@ -699,7 +700,9 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
         return false;
     }
 
-    if (shadow.punctuationOpen && _pCompositionProcessorEngine->IsPunctuation(*classifiedWch))
+    // Same numpad '/' exception as _IsKeyEaten.
+    if (shadow.punctuationOpen && *classifiedCode != VK_DIVIDE &&
+        _pCompositionProcessorEngine->IsPunctuation(*classifiedWch))
     {
         return setKeyState(CATEGORY_COMPOSING, FUNCTION_PUNCTUATION);
     }

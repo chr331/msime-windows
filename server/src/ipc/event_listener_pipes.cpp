@@ -866,6 +866,9 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::PairedPunctuationChanged,
                 GetConfiguredPairedPunctuationEnabled() ? L"1" : L"0");
             SendToTsfWorkerThreadClientViaNamedpipe(
+                hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::EnumerationCommaKeysChanged,
+                FormatEnumerationCommaWorkerPayload());
+            SendToTsfWorkerThreadClientViaNamedpipe(
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::MicrosoftShuangpinChanged,
                 IsConfiguredShuangpinSemicolonFinal() ? L"1" : L"0");
             SendToTsfWorkerThreadClientViaNamedpipe(
@@ -883,6 +886,9 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
             SendToTsfWorkerThreadClientViaNamedpipe(
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::MidSentenceHelpcodeUppercaseChanged,
                 FormatMidSentenceHelpcodeUppercaseWorkerPayload());
+            SendToTsfWorkerThreadClientViaNamedpipe(
+                hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::EndHelpcodeTriggersChanged,
+                FormatEndHelpcodeTriggersWorkerPayload());
             SendToTsfWorkerThreadClientViaNamedpipe(hello.client_id,
                                                     Global::DataFromServerMsgTypeToTsfWorkerThread::InputModeChanged,
                                                     GetActiveInputMode() == "japanese" ? L"1" : L"0");

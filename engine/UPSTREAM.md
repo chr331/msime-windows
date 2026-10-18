@@ -70,7 +70,10 @@ eol=lf`) doing what it does to every other file; the content is unchanged.
 original formatting and under its original licence. Local changes so far: a per-syllable Hanzi
 constraint for the shuangpin mid-sentence helpcode — `MatrixSearch::set_char_constraints`,
 `MatrixSearch::filter_lpis_by_constraints` (called from `add_char_qwerty` before
-`extend_mtrx_nd`), `im_set_char_constraints` and the `CharConstraintFn` typedef in `dictdef.h`.
+`extend_mtrx_nd`), `im_set_char_constraints` and the `CharConstraintFn` typedef in `dictdef.h`;
+and in the multi-syllable branch of `MatrixSearch::get_lpis`, items equal to the full sentence
+candidate are dropped before deduplication, so a better-scored duplicate of a dropped item no longer
+writes `lma_buf[-1]` (crashed the Server on shuangpin `zjle`, i.e. `zan'l`).
 
 ## Why this file and not `product-lock.json`
 

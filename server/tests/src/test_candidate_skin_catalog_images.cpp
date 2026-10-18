@@ -541,6 +541,9 @@ handle = "#123456"
 
     REQUIRE(CandidateSkinCatalog::IsOfficialPackage("green_leaf"));
     REQUIRE(!CandidateSkinCatalog::IsOfficialPackage("fluent"));
+    // 微信绿(卷轴) 是内置皮肤，有自己的出厂清单，不是官方皮肤包。
+    REQUIRE(CandidateSkinCatalog::IsBuiltIn("wechat_scroll"));
+    REQUIRE(!CandidateSkinCatalog::IsOfficialPackage("wechat_scroll"));
     REQUIRE(!CandidateSkinCatalog::IsBuiltIn("green_leaf"));
 }
 

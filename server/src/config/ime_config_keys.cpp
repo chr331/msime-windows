@@ -1,6 +1,7 @@
-// 按键行为配置：翻页键、方向键选词、以词定字、智能标点、配对标点与标点锁定，以及发给 TSF 的对应载荷。
+// 按键行为配置：翻页键、方向键选词、以词定字、智能标点、配对标点、顿号键与标点锁定，以及发给 TSF 的对应载荷。
 #include "config/ime_config_internal.h"
 #include <string>
+#include "engine/contracts/enumeration_comma.h"
 #include "utils/common_utils.h"
 #include "global/globals.h"
 
@@ -252,6 +253,51 @@ bool SetConfiguredPairedPunctuationEnabled(bool enabled)
     }
     g_paired_punctuation_enabled = enabled;
     return true;
+}
+
+bool GetConfiguredEnumerationCommaBackslashEnabled()
+{
+    return g_enumeration_comma_backslash_enabled;
+}
+
+bool SetConfiguredEnumerationCommaBackslashEnabled(bool enabled)
+{
+    // 至少留一个：设置页取消不掉最后一个，这里同样不收。
+    if (!enabled && !g_enumeration_comma_slash_enabled)
+    {
+        return false;
+    }
+    if (!WriteConfiguredValue("input", "enumeration_comma_backslash", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_enumeration_comma_backslash_enabled = enabled;
+    return true;
+}
+
+bool GetConfiguredEnumerationCommaSlashEnabled()
+{
+    return g_enumeration_comma_slash_enabled;
+}
+
+bool SetConfiguredEnumerationCommaSlashEnabled(bool enabled)
+{
+    if (!enabled && !g_enumeration_comma_backslash_enabled)
+    {
+        return false;
+    }
+    if (!WriteConfiguredValue("input", "enumeration_comma_slash", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_enumeration_comma_slash_enabled = enabled;
+    return true;
+}
+
+std::wstring FormatEnumerationCommaWorkerPayload()
+{
+    return std::wstring(1, FanyImeEnumerationComma::PayloadFor(g_enumeration_comma_backslash_enabled,
+                                                               g_enumeration_comma_slash_enabled));
 }
 
 const std::string &GetConfiguredPunctuationLock()

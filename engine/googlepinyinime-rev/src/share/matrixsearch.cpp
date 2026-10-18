@@ -1601,6 +1601,12 @@ size_t MatrixSearch::get_lpis(const uint16* splid_str, size_t splid_str_len, Lma
 
         size_t remain_num = 0;
         for (size_t pos = 0; pos < lpsi_num; pos++) {
+            // Drop every copy of the full sentence candidate before deduplicating.
+            // Checking it after the duplicate test let a better-scored second copy
+            // (e.g. "zan'l" matching 赞了 as both zan'le and zan'liao) overwrite
+            // lma_buf[remain_num - 1] while remain_num was still 0, writing in
+            // front of the buffer.
+            if (NULL != pfullsent && utf16_strcmp(lpsis[pos].str, pfullsent) == 0) continue;
             if (pos > 0 && utf16_strcmp(lpsis[pos].str, lpsis[pos - 1].str) == 0) {
                 if (lpsis[pos].lpi.psb < lpsis[pos - 1].lpi.psb) {
                     assert(remain_num > 0);
@@ -1608,7 +1614,6 @@ size_t MatrixSearch::get_lpis(const uint16* splid_str, size_t splid_str_len, Lma
                 }
                 continue;
             }
-            if (NULL != pfullsent && utf16_strcmp(lpsis[pos].str, pfullsent) == 0) continue;
 
             lma_buf[remain_num] = lpsis[pos].lpi;
             remain_num++;

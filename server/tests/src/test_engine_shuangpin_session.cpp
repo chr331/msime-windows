@@ -1347,7 +1347,9 @@ TEST_CASE(EngineShuangpinInitialVQueriesZhCandidatesAndExpands)
     }));
     const auto initial_count = initial_candidates.size();
 
+    REQUIRE(session.can_expand_initial_candidates());
     REQUIRE(session.expand_initial_candidates());
+    REQUIRE(!session.can_expand_initial_candidates());
     const auto &expanded_candidates = session.get_candidates();
     REQUIRE(expanded_candidates.size() > initial_count);
     REQUIRE(
@@ -1367,9 +1369,23 @@ TEST_CASE(EngineQuanpinInitialCandidatesStartLimitedAndExpand)
                         [](const IInputSession::WordItem &item) { return item.pinyin.rfind("z", 0) == 0; }));
     const auto initial_count = initial_candidates.size();
 
+    REQUIRE(session.can_expand_initial_candidates());
     REQUIRE(session.expand_initial_candidates());
+    // 展开过一次就到底了：候选窗满页末页的下一页箭头靠这个置灰。
+    REQUIRE(!session.can_expand_initial_candidates());
+    REQUIRE(!session.expand_initial_candidates());
     const auto &expanded_candidates = session.get_candidates();
     REQUIRE(expanded_candidates.size() > initial_count);
+}
+
+TEST_CASE(EngineQuanpinFullSyllableCandidatesCannotExpand)
+{
+    EngineInputSession session(SchemeType::Quanpin);
+    InputLetters(session, "nihao");
+
+    REQUIRE(!session.get_candidates().empty());
+    REQUIRE(!session.can_expand_initial_candidates());
+    REQUIRE(!session.expand_initial_candidates());
 }
 
 TEST_CASE(EngineQuanpinSegmentedInitialCandidatesExpandInPlace)
@@ -1833,6 +1849,66 @@ TEST_CASE(ShuangpinDirectAndMidSentenceHelpcodeAreMutuallyExclusive)
     InitImeConfig();
     REQUIRE(GetConfiguredShuangpinDirectHelpcodeEnabled());
     REQUIRE(!GetConfiguredShuangpinMidSentenceHelpcodeEnabled());
+}
+
+TEST_CASE(ShuangpinEndAndMidSentenceHelpcodeTriggersAreExclusive)
+{
+    struct ReloadConfigOnExit
+    {
+        ~ReloadConfigOnExit()
+        {
+            InitImeConfig();
+        }
+    } reload;
+    ScopedConfigRoot config_root;
+    InitImeConfig();
+
+    // 出厂：末尾辅助码直接触发，间接触发键是分号；句中辅助码的触发键是反引号。
+    REQUIRE(GetConfiguredShuangpinHelpcodeDirect());
+    REQUIRE(GetConfiguredShuangpinHelpcodeTriggerSemicolon());
+    REQUIRE(!GetConfiguredShuangpinHelpcodeTriggerBacktick() && !GetConfiguredShuangpinHelpcodeTriggerUppercase());
+    REQUIRE(GetConfiguredShuangpinMidSentenceHelpcodeBacktick());
+    REQUIRE(!GetConfiguredShuangpinMidSentenceHelpcodeSemicolon());
+    // 直接触发时引导键不生效。
+    REQUIRE(!IsConfiguredEndHelpcodeTrigger(L';'));
+
+    // 末尾一侧至少留一个。
+    REQUIRE(!SetConfiguredShuangpinHelpcodeTriggerSemicolon(false));
+    REQUIRE(GetConfiguredShuangpinHelpcodeTriggerSemicolon());
+
+    // 勾上一边的键就把另一边的同一个键取消。
+    REQUIRE(SetConfiguredShuangpinMidSentenceHelpcodeUppercase(true));
+    REQUIRE(SetConfiguredShuangpinHelpcodeTriggerBacktick(true));
+    REQUIRE(GetConfiguredShuangpinHelpcodeTriggerBacktick());
+    REQUIRE(!GetConfiguredShuangpinMidSentenceHelpcodeBacktick());
+    REQUIRE(GetConfiguredShuangpinMidSentenceHelpcodeUppercase());
+
+    // 反过来同理：句中一侧勾上分号，末尾一侧的分号随之取消。
+    REQUIRE(SetConfiguredShuangpinMidSentenceHelpcodeSemicolon(true));
+    REQUIRE(GetConfiguredShuangpinMidSentenceHelpcodeSemicolon());
+    REQUIRE(!GetConfiguredShuangpinHelpcodeTriggerSemicolon());
+    REQUIRE(GetConfiguredShuangpinHelpcodeTriggerBacktick());
+
+    // 拿走的是另一边最后一个键也照收：另一边一个都不剩，引导键不生效。
+    REQUIRE(SetConfiguredShuangpinMidSentenceHelpcodeBacktick(true));
+    REQUIRE(!GetConfiguredShuangpinHelpcodeTriggerBacktick() && !GetConfiguredShuangpinHelpcodeTriggerSemicolon() &&
+            !GetConfiguredShuangpinHelpcodeTriggerUppercase());
+
+    // 落盘：重新加载后还是同一个状态，全关的一侧不补默认键。
+    InitImeConfig();
+    REQUIRE(!GetConfiguredShuangpinHelpcodeTriggerBacktick() && !GetConfiguredShuangpinHelpcodeTriggerSemicolon() &&
+            !GetConfiguredShuangpinHelpcodeTriggerUppercase());
+    REQUIRE(GetConfiguredShuangpinMidSentenceHelpcodeSemicolon() &&
+            GetConfiguredShuangpinMidSentenceHelpcodeBacktick());
+    REQUIRE(SetConfiguredShuangpinHelpcodeTriggerBacktick(true));
+    REQUIRE(GetConfiguredShuangpinHelpcodeTriggerBacktick() && !GetConfiguredShuangpinMidSentenceHelpcodeBacktick());
+
+    // 关掉直接触发后引导键生效；直接辅助码（万象式）接管辅码时又一律不生效。
+    REQUIRE(SetConfiguredShuangpinHelpcodeEnabled(true));
+    REQUIRE(SetConfiguredShuangpinHelpcodeDirect(false));
+    REQUIRE(IsConfiguredEndHelpcodeTrigger(L'`') && !IsConfiguredEndHelpcodeTrigger(L';'));
+    REQUIRE(SetConfiguredShuangpinDirectHelpcodeEnabled(true));
+    REQUIRE(!IsConfiguredEndHelpcodeTrigger(L'`'));
 }
 
 TEST_CASE(EngineShuangpinMidSentenceUppercaseTriggerActsAsBacktick)

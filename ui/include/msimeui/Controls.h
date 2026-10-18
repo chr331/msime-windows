@@ -646,6 +646,14 @@ class CandidateList : public Visual
         // Horizontal only: items narrower than this are widened to it, content
         // stays leading. 0 keeps every item at its natural width.
         float minItemWidth = 0.0f;
+        // Horizontal only: > 0 lays the items on a grid of equal columns that
+        // span the available width, as many as fit at minItemWidth each but at
+        // most this many. An item wider than one column takes as many columns
+        // as it needs. Ignored when the available width is unbounded.
+        int gridColumns = 0;
+        // false: no item is ever drawn as selected (no fill, bar or selected
+        // colors), so every item, the first included, shows hover and press.
+        bool selectable = true;
         // Measure exactly to the content: no 80 DIP minimum list width and no
         // slack after the text beyond the annotation gap. Pair it with a
         // contentPadRight equal to contentPadLeft + textPadLeft for even margins.

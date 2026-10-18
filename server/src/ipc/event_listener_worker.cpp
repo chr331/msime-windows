@@ -153,6 +153,9 @@ struct Task
     bool session_pinyin_is_canonical = false;
     std::shared_ptr<IInputSession> phrase_session;
     int candidate_one_based_index = 0;
+    // UiCommitCandidateAt：卷轴展开面板里点中的候选的绝对下标与显示文字。
+    int candidate_absolute_index = 0;
+    std::wstring candidate_expected_text;
     int fixed_position = 0;
     int page_steps = 0;
     bool toolbar_from_ime_enabled = false;
@@ -250,7 +253,8 @@ void WorkerThread()
             task.type == TaskType::UiCommitCandidate || task.type == TaskType::UiPinCandidate ||
             task.type == TaskType::UiDeleteCandidate || task.type == TaskType::UiFixCandidatePosition ||
             task.type == TaskType::UiClearCandidatePosition || task.type == TaskType::UiPageUp ||
-            task.type == TaskType::UiPageDown;
+            task.type == TaskType::UiPageDown || task.type == TaskType::UiCommitCandidateAt ||
+            task.type == TaskType::UiExpandCandidates;
         if (candidateUiAction && !CandidateUiOwnerIsCurrent({task.client_id, task.activation_epoch}))
         {
             // The page was hidden or replaced after the click was posted.
@@ -600,8 +604,18 @@ void WorkerThread()
             break;
         }
 
-        case TaskType::UiCommitCandidate: {
-            ProcessSelectionKey(0, task.client_id, task.activation_epoch, task.candidate_one_based_index - 1);
+        case TaskType::UiCommitCandidate:
+        case TaskType::UiCommitCandidateAt: {
+            int index_in_page = task.candidate_one_based_index - 1;
+            if (task.type == TaskType::UiCommitCandidateAt)
+            {
+                index_in_page = MoveToExpandedCandidate(task.candidate_absolute_index, task.candidate_expected_text);
+                if (index_in_page < 0)
+                {
+                    break;
+                }
+            }
+            ProcessSelectionKey(0, task.client_id, task.activation_epoch, index_in_page);
             if (Global::MsgTypeToTsf == Global::DataFromServerMsgType::Normal)
             {
                 // The worker packet is the complete edit-session-owned commit
@@ -751,6 +765,19 @@ void WorkerThread()
             {
                 RefreshCandidatePageUi(true);
             }
+            break;
+        }
+
+        case TaskType::UiExpandCandidates: {
+            if (Global::candidate_ui.items.empty())
+            {
+                break;
+            }
+            // 用户在浏览展开面板，保持已显示的顺序，新展开的候选只追加在后面。
+            Global::candidate_ui.begin_selection();
+            ExpandCandidatesKeepingPagePosition();
+            // 刚打开面板时即使没有新候选，也要重新发布一次，候选页才带上后续候选。
+            RefreshCandidatePageUi(true);
             break;
         }
 
@@ -1217,6 +1244,59 @@ void EnqueueCandidateUiPaging(CandidateUiAction action, int steps)
             task.page_steps = steps;
             taskQueue.push(std::move(task));
         }
+    }
+    pipe_queueCv.notify_one();
+}
+
+void EnqueueCandidateUiCommitAt(int absolute_index, std::wstring expected_text)
+{
+    if (!pipe_running || absolute_index < 0 || expected_text.empty())
+    {
+        return;
+    }
+    const FanyImeIpc::CandidateUiOwner owner = SnapshotCandidateUiOwner();
+    if (!owner)
+    {
+        return;
+    }
+    {
+        std::lock_guard lock(queueMutex);
+        Task task;
+        task.type = TaskType::UiCommitCandidateAt;
+        task.client_id = owner.client_id;
+        task.activation_epoch = owner.activation_epoch;
+        task.candidate_absolute_index = absolute_index;
+        task.candidate_expected_text = std::move(expected_text);
+        taskQueue.push(std::move(task));
+    }
+    pipe_queueCv.notify_one();
+}
+
+void EnqueueCandidateUiExpand()
+{
+    if (!pipe_running)
+    {
+        return;
+    }
+    const FanyImeIpc::CandidateUiOwner owner = SnapshotCandidateUiOwner();
+    if (!owner)
+    {
+        return;
+    }
+    {
+        std::lock_guard lock(queueMutex);
+        // 连续滚到底部只需要展开一次。
+        if (!taskQueue.empty() && taskQueue.back().type == TaskType::UiExpandCandidates &&
+            taskQueue.back().client_id == owner.client_id &&
+            taskQueue.back().activation_epoch == owner.activation_epoch)
+        {
+            return;
+        }
+        Task task;
+        task.type = TaskType::UiExpandCandidates;
+        task.client_id = owner.client_id;
+        task.activation_epoch = owner.activation_epoch;
+        taskQueue.push(std::move(task));
     }
     pipe_queueCv.notify_one();
 }

@@ -12,6 +12,7 @@ class PinyinCandidateProvider : public ICandidateProvider
     std::vector<WordItem> query(const QueryRequest &request) override;
     std::optional<WordItem> find_candidate(SchemeType scheme, const std::string &key,
                                            const std::string &value) override;
+    bool can_expand_initial_candidates(const QueryRequest &request, const std::vector<WordItem> &candidates) const;
     bool expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates);
     // 双拼直接辅助码，见 ShuangpinEngine::resolve_direct_helpcode。
     bool resolve_direct_helpcode(QueryRequest &request);

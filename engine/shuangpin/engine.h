@@ -15,6 +15,7 @@ class ShuangpinEngine
     std::vector<WordItem> query(const QueryRequest &request);
     // 直接辅助码：在 query 之前把请求改写成句中辅助码的形状，见 ShuangpinDictionary::resolve_direct_helpcode。
     bool resolve_direct_helpcode(QueryRequest &request);
+    bool can_expand_initial_candidates(const QueryRequest &request, const std::vector<WordItem> &candidates) const;
     bool expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates);
     std::optional<WordItem> find_candidate(const std::string &key, const std::string &value);
     int create_word(std::string pinyin, std::string word);
@@ -41,6 +42,8 @@ class ShuangpinEngine
     HelpcodeUtils::SharedKeymap helpcodes_;
     // query 的主体；query 在它外面下发请求级选项、按句中辅助码收尾筛选。
     std::vector<WordItem> query_unfiltered(const QueryRequest &request);
+    // 能展开首字母候选时返回那个首字母，否则返回空串。
+    std::string expandable_initial_code(const QueryRequest &request) const;
     std::vector<WordItem> append_fuzzy(std::vector<WordItem> exact, const std::string &raw_segmentation,
                                        metasequoia::FuzzyPinyinOptions options, const std::string &helpcodes = "");
 };

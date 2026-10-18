@@ -15,6 +15,7 @@ class QuanpinEngine
     ~QuanpinEngine();
 
     std::vector<WordItem> query(const QueryRequest &request);
+    bool can_expand_initial_candidates(const QueryRequest &request, const std::vector<WordItem> &candidates) const;
     bool expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates);
     std::optional<WordItem> find_candidate(const std::string &key, const std::string &value);
     int handleVkCode(ImeKeyCode vk, ImeModifierMask modifiers_down, ImeCharacter wch = 0);

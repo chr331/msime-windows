@@ -457,7 +457,17 @@ constexpr std::uint32_t AiContextUploadChanged = 34;
 constexpr std::uint32_t UiLessCandidatesChanged = 35;
 // Temporary R-mode policy: one character 0..3, see temporary_japanese_input.h.
 constexpr std::uint32_t TemporaryJapanesePolicyChanged = 36;
-constexpr std::uint32_t MaxKnown = TemporaryJapanesePolicyChanged;
+// Which keys open a shuangpin end helpcode block while the end helpcode is indirect (triggered by a guide key instead
+// of being read off the input shape). Payload one character '0'..'7', see FanyImeEndHelpcode::PayloadFor: bit 1 '`',
+// bit 2 ';', bit 4 uppercase. TSF eats '`' / ';' that can start a block (FanyImeMidSentenceHelpcode::
+// AcceptsEndMarkerAt) and records them as FanyImeMidSentenceHelpcode::kEndMarker; with the uppercase bit it counts an
+// uppercase end block as no keys of the chunk. Older DLLs ignore the opcode and keep treating the keys as punctuation.
+constexpr std::uint32_t EndHelpcodeTriggersChanged = 37;
+// Which keys produce the enumeration comma 、 under Chinese punctuation. Payload one character '1'..'3', see
+// FanyImeEnumerationComma::PayloadFor: bit 1 '\', bit 2 '/'. A key whose bit is clear is not Chinese punctuation and
+// passes through as itself. Older DLLs ignore the opcode and keep '\' only.
+constexpr std::uint32_t EnumerationCommaKeysChanged = 38;
+constexpr std::uint32_t MaxKnown = EnumerationCommaKeysChanged;
 // Source compatibility for the Server's historical spellings.
 constexpr std::uint32_t SwitchToEn = SwitchToEnglish;
 constexpr std::uint32_t SwitchToCn = SwitchToChinese;

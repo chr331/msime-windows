@@ -71,6 +71,12 @@ std::optional<WordItem> ProviderRegistry::find_candidate(SchemeType scheme_type,
     return resolve(scheme_type).find_candidate(scheme_type, key, value);
 }
 
+bool ProviderRegistry::can_expand_initial_candidates(const QueryRequest &request,
+                                                     const std::vector<WordItem> &candidates) const
+{
+    return pinyin_provider_.can_expand_initial_candidates(request, candidates);
+}
+
 bool ProviderRegistry::expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates)
 {
     return pinyin_provider_.expand_initial_candidates(request, candidates);

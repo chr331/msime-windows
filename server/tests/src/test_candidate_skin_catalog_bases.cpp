@@ -215,7 +215,8 @@ TEST_CASE(candidate_skin_shared_base_scan_rejects_unknown_base_and_keeps_legacy_
         REQUIRE(!error.empty());
     }
     const auto catalog = CandidateSkinCatalog::Scan(fixture.root);
-    REQUIRE_EQ(catalog.packages.size(), size_t{8});
+    // 每个内置基底一份，加上 system 与 paper 两个共享基底。
+    REQUIRE_EQ(catalog.packages.size(), CandidateSkinCatalog::BuiltInIds().size() + 2);
     REQUIRE_EQ(catalog.issues.size(), size_t{1});
     REQUIRE_EQ(catalog.issues.front().folder, std::string("unknown"));
 }

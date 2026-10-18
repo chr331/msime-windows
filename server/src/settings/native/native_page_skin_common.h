@@ -2,10 +2,13 @@
 
 #include "settings/native/native_settings_pages.h"
 
+#include "window/candidate_skin_scene.h"
+
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
 
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -25,7 +28,7 @@ namespace skinpreview
 bool ResolveSurfaceLight(const SettingsModel &model, const char *surfacePath);
 bool SystemPrefersLight();
 
-// The six skins built into the candidate window.
+// The built-in skins (CandidateSkinCatalog::BuiltInIds), in the skin page's order.
 const std::vector<std::string> &BuiltinSkins();
 bool IsBuiltinSkin(const std::string &id);
 
@@ -47,77 +50,19 @@ struct CandidateFont
 };
 CandidateFont ReadCandidateFont(const SettingsModel &model);
 
-// Resolved look of a candidate window preview for one skin, theme and layout.
+// skins/ under appearance.candidate_skin_directory (the data directory's skins folder by default).
+std::filesystem::path SkinsRoot(const SettingsModel &model);
+
+// Surface, border and text color of a skin's candidate window, as the caret state indicator
+// draws them: read from the same skin manifests as the candidate window (built-in look under
+// skins/default, then the external skin's own colors), a translucent surface flattened onto
+// the base's opaque one.
 struct CandidateLook
 {
-    // Colors (CSS variables and the skin's overrides).
-    D2D1_COLOR_F bg = {}, border = {}, text = {}, num = {}, hover = {}, selected = {}, accent = {}, bar = {};
-    D2D1_COLOR_F selectedText = {}, selectedNum = {}; // alpha 0 keeps text / num
-    D2D1_COLOR_F candText = {}, preeditText = {};     // alpha 0 keeps text
-    D2D1_COLOR_F preeditBg = {}, preeditDivider = {}; // alpha 0 draws nothing
-    bool light = false;
-    bool showBar = true;
-    bool clip = false; // willow green: overflow hidden on the rounded frame
-    // Frame.
-    float borderWidth = 1.5f;
-    float radius = 6.0f;
-    float itemRadius = 4.0f;
-    float firstRadius = 4.0f;
-    float edgeRadius = 0.0f;       // highlight corner on the frame's corners (first / last item)
-    bool lastBottomRadius = false; // vertical: last row's bottom corners (autumn osmanthus)
-    float minWidth = 0.0f;         // extra min-width from the manifest (DIPs)
-    // Shadow (8px 10px 24px + 2px 3px 8px at these alphas; 0 means none).
-    float shadowAlpha1 = 0.34f, shadowAlpha2 = 0.22f;
-    // Geometry, already in DIPs for the font size.
-    Thickness containerPad = {};
-    Thickness pinyinPad = {};
-    float pinyinMarginTop = 0.0f, pinyinMarginBottom = 0.0f;
-    float pinyinFontSize = 16.0f;
-    Thickness pinyinTextPad = {};
-    Thickness candPad = {};
-    float candMarginTop = 0.0f, candMarginBottom = 0.0f;
-    Thickness candTextPad = {};
-    float candLineHeight = 1.35f;
-    float wrapperGap = 0.0f; // vertical: extra space between row wrappers
-    float wrapperMarginRight = 0.0f, wrapperMarginBottom = 0.0f;
-    float letterSpacing = 0.0f; // container letter-spacing, DIPs (eats the space between items)
-    float candMinWidth = 0.0f;
-    float numScale = 0.8f, numMarginRight = 0.0f;
-    float barWidth = 3.2f, barHeight = 12.8f, barTop = 0.5f;
-    bool triangleArrows = false; // microsoft
-    float arrowGap = 1.0f;
-    std::wstring fontOverride; // manifest font_family, in front of the user's fonts
-    // Images of an external skin.
-    std::wstring backgroundImage;
-    std::string backgroundFit;
-    float backgroundOpacity = 1.0f;
-    std::wstring decorationImage;
-    std::string decorationAlign;
-    float decorationTop = 0.0f, decorationWidth = 0.0f;
-    // Panel image of a canvas (schema 2) skin, nine-sliced over the frame like CSS border-image:
-    // slices in image pixels, widths in DIPs. Empty when the skin has none.
-    std::wstring panelImage;
-    Thickness panelSlice = {}, panelWidth = {};
-    bool panelFill = true;
-    // A schema 2 skin plays its APNG / GIF images (panel and decorations); v1 skins stay still,
-    // as in the candidate window.
-    bool animated = false;
-    // outer_insets_dip: room around the frame for decorations that hang outside it.
-    Thickness outer = {};
-    // Free decorations of a schema 2 skin, anchored to the frame. `below` is drawn under the
-    // panel, `above` over the panel and the text, each in its array order.
-    struct Decoration
-    {
-        std::wstring image;
-        std::string anchor;
-        float offsetX = 0.0f, offsetY = 0.0f;
-        float width = 0.0f, height = 0.0f; // 0 takes the image's own size
-    };
-    std::vector<Decoration> decorationsBelow, decorationsAbove;
+    D2D1_COLOR_F bg = {}, border = {}, text = {};
 };
 
-CandidateLook ResolveCandidateLook(const SettingsModel &model, const std::string &skinId, bool light, bool horizontal,
-                                   float fontSize);
+CandidateLook ResolveCandidateLook(const SettingsModel &model, const std::string &skinId, bool light);
 
 // Look of the floating toolbar preview.
 struct ToolbarLook
@@ -148,31 +93,35 @@ ID2D1Bitmap *PreviewFrame(msimeui::DeviceResources &dr, const std::wstring &path
                           D2D1_SIZE_F *size = nullptr);
 SizeF ImageFileSize(const std::wstring &path);
 
-// `.candidate.wnd-v` / `.wnd-h` with the sample candidates of partials/candidate.
-class CandidatePreview : public msimeui::Visual
+// A candidate window with sample candidates, drawn by the candidate window's own scene
+// (CandidateSkinScene): same skin manifests, same controls, so it looks exactly like the real
+// one. Page arrows and the scroll-expand button follow the skin's switches; the expand panel
+// stays collapsed. Hovering highlights a candidate; clicks do nothing.
+class CandidatePreview : public msimeui::Container
 {
   public:
     struct Options
     {
         bool horizontal = false;
-        bool pageArrows = false;
         size_t pageSize = 6;
         bool helpcode = true;
         bool preedit = true;
+        // 0 takes the candidate font size.
+        float preeditFontSize = 0.0f;
+        // The candidate text color setting ("auto" keeps the skin's).
+        std::string textColor = "auto";
+        bool fitContent = false;
     };
 
     CandidatePreview();
-    void Set(const CandidateLook &look, const CandidateFont &font, const Options &options);
-
-    SizeF Measure(const SizeF &availableSize) override;
-    void Arrange(const RectF &finalRect) override;
-    void Render(msimeui::DeviceResources &dr) override;
-    bool OnMouseMove(const POINT &point, WPARAM keyState) override;
-    void OnMouseLeave() override;
+    void Set(const SettingsModel &model, const std::string &skinId, bool light, const CandidateFont &font,
+             const Options &options);
 
   private:
-    struct Impl;
-    std::shared_ptr<Impl> impl_;
+    std::unique_ptr<CandidateSkinScene> scene_;
+    // Roots replaced by a rebuild. The window may still point at a visual in one of them as
+    // the hovered or focused one, so they live on for a while instead of being freed at once.
+    std::vector<std::shared_ptr<msimeui::Visual>> retired_;
 };
 
 // `.ftb-preview-host .status-bar` with the icons of ftb/default.html.

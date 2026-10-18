@@ -27,6 +27,13 @@
 
 namespace
 {
+// 解析按键缓冲时哪种大写字母开段：句中辅助码或末尾辅助码（间接）的大写触发，Server 只会让其中一个生效。
+FanyImeMidSentenceHelpcode::UppercaseTriggers HelpcodeUppercaseTriggers()
+{
+    return {Global::MidSentenceHelpcodeUppercaseEnabled.load(std::memory_order_relaxed),
+            (Global::EndHelpcodeTriggers.load(std::memory_order_relaxed) & FanyImeEndHelpcode::kUppercase) != 0};
+}
+
 // 微软/搜狗/紫光双拼的 ';' 是 ing 韵母：光标前这一节（最后一个 ' 之后）是奇数键时它是编码键。
 bool IsMicrosoftShuangpinIngKeyAt(UINT uCode, WCHAR wch, const WCHAR *buffer, DWORD_PTR length, DWORD_PTR caret)
 {
@@ -42,10 +49,9 @@ bool IsMicrosoftShuangpinIngKeyAt(UINT uCode, WCHAR wch, const WCHAR *buffer, DW
         return FanyImeDirectHelpcode::AcceptsSemicolonFinalAt(buffer, static_cast<std::size_t>(length),
                                                               static_cast<std::size_t>(caret));
     }
-    // 大写触发开着时大写段不算这一节的键；关着时就是原来「最后一个 ' 之后数奇偶」的规则。
+    // 大写触发开着、或缓冲里有末尾段时，段不算这一节的键；都没有时就是原来「最后一个 ' 之后数奇偶」的规则。
     return FanyImeMidSentenceHelpcode::AcceptsSemicolonFinalAt(
-        buffer, static_cast<std::size_t>(length), static_cast<std::size_t>(caret),
-        Global::MidSentenceHelpcodeUppercaseEnabled.load(std::memory_order_relaxed));
+        buffer, static_cast<std::size_t>(length), static_cast<std::size_t>(caret), HelpcodeUppercaseTriggers());
 }
 
 // 双拼直接辅助码的 /：四码（两键音节 + 两位辅码）后面的终止键是编码键，否则仍按标点处理。Server
@@ -69,9 +75,24 @@ bool IsMidSentenceHelpcodeMarkerKey(UINT uCode, WCHAR wch, const WCHAR *buffer, 
                            Global::MidSentenceHelpcodeSemicolonEnabled.load(std::memory_order_relaxed) &&
                            !IsMicrosoftShuangpinIngKeyAt(uCode, wch, buffer, length, caret);
     return (backtick || semicolon) && buffer != nullptr && length > 0 &&
-           FanyImeMidSentenceHelpcode::AcceptsMarkerAt(
-               buffer, static_cast<std::size_t>(length), static_cast<std::size_t>(min(caret, length)),
-               Global::MidSentenceHelpcodeUppercaseEnabled.load(std::memory_order_relaxed));
+           FanyImeMidSentenceHelpcode::AcceptsMarkerAt(buffer, static_cast<std::size_t>(length),
+                                                       static_cast<std::size_t>(min(caret, length)),
+                                                       HelpcodeUppercaseTriggers());
+}
+
+// 双拼末尾辅助码（间接）的触发键（反引号或分号，Server 按设置和与句中辅助码的互斥发来的那几个）：光标在
+// 缓冲末尾、前面是一节完整的两键音节时是编码键，缓冲里记成 kEndMarker，否则仍按标点处理。分号先让给 ing
+// 韵母。Server 用同一条形状规则决定收不收（engine/contracts/mid_sentence_helpcode.h）。
+bool IsEndHelpcodeMarkerKey(UINT uCode, WCHAR wch, const WCHAR *buffer, DWORD_PTR length, DWORD_PTR caret)
+{
+    const unsigned triggers = Global::EndHelpcodeTriggers.load(std::memory_order_relaxed);
+    const bool backtick = uCode == VK_OEM_3 && wch == L'`' && (triggers & FanyImeEndHelpcode::kBacktick) != 0;
+    const bool semicolon = uCode == VK_OEM_1 && wch == L';' && (triggers & FanyImeEndHelpcode::kSemicolon) != 0 &&
+                           !IsMicrosoftShuangpinIngKeyAt(uCode, wch, buffer, length, caret);
+    return (backtick || semicolon) && buffer != nullptr && length > 0 &&
+           FanyImeMidSentenceHelpcode::AcceptsEndMarkerAt(buffer, static_cast<std::size_t>(length),
+                                                          static_cast<std::size_t>(min(caret, length)),
+                                                          HelpcodeUppercaseTriggers());
 }
 
 // 日语模式禁用 -/= 翻页：'-' 是长音符（ー）的输入键。空编码时也要起头组合，
@@ -339,6 +360,8 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed( //
 
     if (IsMidSentenceHelpcodeMarkerKey(uCode, pwch ? *pwch : 0, _keystrokeBuffer.Get(), _keystrokeBuffer.GetLength(),
                                        _caretPosition) ||
+        IsEndHelpcodeMarkerKey(uCode, pwch ? *pwch : 0, _keystrokeBuffer.Get(), _keystrokeBuffer.GetLength(),
+                               _caretPosition) ||
         IsDirectHelpcodeSlashKey(uCode, pwch ? *pwch : 0, _keystrokeBuffer.Get(), _keystrokeBuffer.GetLength(),
                                  _caretPosition))
     {
@@ -855,7 +878,8 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed( //
 bool CCompositionProcessorEngine::IsMidSentenceHelpcodeTriggerKey(UINT uCode, WCHAR wch, const WCHAR *buffer,
                                                                   DWORD_PTR length, DWORD_PTR caret)
 {
-    return IsMidSentenceHelpcodeMarkerKey(uCode, wch, buffer, length, caret);
+    return IsMidSentenceHelpcodeMarkerKey(uCode, wch, buffer, length, caret) ||
+           IsEndHelpcodeMarkerKey(uCode, wch, buffer, length, caret);
 }
 
 bool CCompositionProcessorEngine::IsDirectHelpcodeInputKey(UINT uCode, WCHAR wch, const WCHAR *buffer, DWORD_PTR length,
@@ -898,15 +922,23 @@ bool CCompositionProcessorEngine::IsVModeInputKey(WCHAR wch, const WCHAR *buffer
                                                              Global::VModeTrigger.load(std::memory_order_relaxed));
 }
 
-// 分号触发的句中辅助码段在按键缓冲里记成反引号，与 Server 的 raw 一致。在加入缓冲之前、按与吃键
-// 预判相同的状态判断。
+// 分号触发的句中辅助码段在按键缓冲里记成反引号，末尾辅助码（间接）的触发键记成 kEndMarker，与 Server 的
+// raw 一致。在加入缓冲之前、按与吃键预判相同的状态判断。
 WCHAR CCompositionProcessorEngine::NormalizeMidSentenceHelpcodeTrigger(WCHAR wch, const WCHAR *buffer, DWORD_PTR length,
                                                                        DWORD_PTR caret)
 {
-    if (wch == FanyImeMidSentenceHelpcode::kSemicolonTrigger &&
-        IsMidSentenceHelpcodeMarkerKey(VK_OEM_1, wch, buffer, length, caret))
+    const UINT uCode = wch == L'`' ? VK_OEM_3 : wch == L';' ? VK_OEM_1 : 0;
+    if (uCode == 0)
+    {
+        return wch;
+    }
+    if (IsMidSentenceHelpcodeMarkerKey(uCode, wch, buffer, length, caret))
     {
         return static_cast<WCHAR>(FanyImeMidSentenceHelpcode::kMarker);
+    }
+    if (IsEndHelpcodeMarkerKey(uCode, wch, buffer, length, caret))
+    {
+        return static_cast<WCHAR>(FanyImeMidSentenceHelpcode::kEndMarker);
     }
     return wch;
 }

@@ -1002,7 +1002,7 @@ VisualPtr BuildShortcutPage(PageContext &context)
     SettingsModel *model = &context.model;
 
     // .shortcut-intro: 13px / 1.6, muted, margin -4px 8px 18px
-    auto intro = std::make_shared<Label>(L"各快捷键的生效范围见下方说明。翻页方式可在“输入”中启用或关闭。",
+    auto intro = std::make_shared<Label>(L"各快捷键的生效范围见下方说明。",
                                          Font(13.0f, DWRITE_FONT_WEIGHT_NORMAL, 1.6f, true), TextRole::Muted);
     page.AddRaw(intro, 18.0f);
     intro->SetMargin({8.0f, -4.0f, 8.0f, 18.0f});
@@ -1089,6 +1089,21 @@ VisualPtr BuildShortcutPage(PageContext &context)
                     editor->Render();
             }
         });
+    }
+
+    // 翻页方式
+    {
+        auto column = std::make_shared<Column>(0.0f);
+        column->Add(Heading(L"翻页方式", L"勾选启用对应的候选翻页键。滚轮翻页依赖系统设置「当我悬停在非活动窗口上方时"
+                                         L"滚动它们」，该项关闭时滚轮不会到达候选窗口"));
+        column->Add(Options({BindCheck(context, L"- / =", "general.paging_minus_equal"),
+                             BindCheck(context, L", / .", "general.paging_comma_period"),
+                             BindCheck(context, L"[ / ]", "general.paging_brackets"),
+                             BindCheck(context, L"Shift+Tab / Tab", "general.paging_tab"),
+                             BindCheck(context, L"PageUp / PageDown", "general.paging_page_up_down"),
+                             BindCheck(context, L"上 / 下（移动候选项）", "general.candidate_arrow_navigation"),
+                             BindCheck(context, L"鼠标滚轮", "general.paging_mouse_wheel")}));
+        page.AddRaw(std::make_shared<FlatSection>(column), 18.0f);
     }
 
     // 候选操作

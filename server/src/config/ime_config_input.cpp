@@ -9,6 +9,7 @@
 #include "engine/common/helpcode_utils.h"
 #include "engine/contracts/direct_helpcode.h"
 #include "engine/contracts/input_state_shortcuts.h"
+#include "engine/contracts/mid_sentence_helpcode.h"
 #include "engine/core/data_path.h"
 #include "engine/shuangpin/shuangpin_profile.h"
 
@@ -401,6 +402,153 @@ bool SetConfiguredShuangpinHelpcodeEnabled(bool enabled)
     return true;
 }
 
+bool GetConfiguredShuangpinHelpcodeDirect()
+{
+    return g_shuangpin_helpcode_direct;
+}
+
+bool SetConfiguredShuangpinHelpcodeDirect(bool enabled)
+{
+    if (!WriteConfiguredValue("helpcode", "shuangpin_helpcode_direct", enabled ? "true" : "false"))
+    {
+        return false;
+    }
+    g_shuangpin_helpcode_direct = enabled;
+    return true;
+}
+
+namespace
+{
+// 末尾辅助码（间接）与句中辅助码的同一个触发键。
+struct HelpcodeTriggerPair
+{
+    const char *end_key;
+    bool *end_value;
+    const char *mid_key;
+    bool *mid_value;
+};
+
+HelpcodeTriggerPair HelpcodeTriggerKeys(char trigger)
+{
+    switch (trigger)
+    {
+    case '`':
+        return {"shuangpin_helpcode_trigger_backtick", &g_shuangpin_helpcode_trigger_backtick,
+                "shuangpin_mid_sentence_helpcode_backtick", &g_shuangpin_mid_sentence_helpcode_backtick};
+    case ';':
+        return {"shuangpin_helpcode_trigger_semicolon", &g_shuangpin_helpcode_trigger_semicolon,
+                "shuangpin_mid_sentence_helpcode_semicolon", &g_shuangpin_mid_sentence_helpcode_semicolon};
+    default:
+        return {"shuangpin_helpcode_trigger_uppercase", &g_shuangpin_helpcode_trigger_uppercase,
+                "shuangpin_mid_sentence_helpcode_uppercase", &g_shuangpin_mid_sentence_helpcode_uppercase};
+    }
+}
+
+int CountEndHelpcodeTriggers()
+{
+    return int(g_shuangpin_helpcode_trigger_backtick) + int(g_shuangpin_helpcode_trigger_semicolon) +
+           int(g_shuangpin_helpcode_trigger_uppercase);
+}
+
+// 勾选或取消一个触发键（end 为 true 是末尾辅助码一侧）。两侧互斥：勾上时另一侧有同一个键就一并取消，哪怕
+// 那是另一侧最后一个键——另一侧这时一个键都不剩，引导键不生效，等用户重新勾一个；末尾一侧自己取消不掉最后
+// 一个。一次写入，失败时内存不动。
+bool SetHelpcodeTrigger(char trigger, bool end, bool enabled)
+{
+    const HelpcodeTriggerPair keys = HelpcodeTriggerKeys(trigger);
+    const char *key = end ? keys.end_key : keys.mid_key;
+    bool *value = end ? keys.end_value : keys.mid_value;
+    const char *other_key = end ? keys.mid_key : keys.end_key;
+    bool *other_value = end ? keys.mid_value : keys.end_value;
+    if (!enabled && end && *value && CountEndHelpcodeTriggers() == 1)
+    {
+        return false;
+    }
+    std::vector<ConfigValueUpdate> updates;
+    updates.push_back({"helpcode", key, enabled ? "true" : "false"});
+    const bool release_other = enabled && *other_value;
+    if (release_other)
+    {
+        updates.push_back({"helpcode", other_key, "false"});
+    }
+    if (!WriteConfiguredValues(updates))
+    {
+        return false;
+    }
+    *value = enabled;
+    if (release_other)
+    {
+        *other_value = false;
+    }
+    return true;
+}
+
+bool EndHelpcodeIndirectActive()
+{
+    return g_shuangpin_helpcode_enabled && !g_shuangpin_helpcode_direct && !g_shuangpin_direct_helpcode_enabled;
+}
+
+bool MidSentenceHelpcodeIndirectActive()
+{
+    return g_shuangpin_mid_sentence_helpcode_enabled && !g_shuangpin_direct_helpcode_enabled;
+}
+} // namespace
+
+bool GetConfiguredShuangpinHelpcodeTriggerBacktick()
+{
+    return g_shuangpin_helpcode_trigger_backtick;
+}
+
+bool SetConfiguredShuangpinHelpcodeTriggerBacktick(bool enabled)
+{
+    return SetHelpcodeTrigger('`', true, enabled);
+}
+
+bool GetConfiguredShuangpinHelpcodeTriggerSemicolon()
+{
+    return g_shuangpin_helpcode_trigger_semicolon;
+}
+
+bool SetConfiguredShuangpinHelpcodeTriggerSemicolon(bool enabled)
+{
+    return SetHelpcodeTrigger(';', true, enabled);
+}
+
+bool GetConfiguredShuangpinHelpcodeTriggerUppercase()
+{
+    return g_shuangpin_helpcode_trigger_uppercase;
+}
+
+bool SetConfiguredShuangpinHelpcodeTriggerUppercase(bool enabled)
+{
+    return SetHelpcodeTrigger('A', true, enabled);
+}
+
+bool IsConfiguredEndHelpcodeTrigger(wchar_t ch)
+{
+    if (!EndHelpcodeIndirectActive() || (ch != L'`' && ch != L';'))
+    {
+        return false;
+    }
+    const HelpcodeTriggerPair keys = HelpcodeTriggerKeys(static_cast<char>(ch));
+    return *keys.end_value && !(MidSentenceHelpcodeIndirectActive() && *keys.mid_value);
+}
+
+bool IsConfiguredEndHelpcodeUppercaseTrigger()
+{
+    return EndHelpcodeIndirectActive() && g_shuangpin_helpcode_trigger_uppercase &&
+           !IsConfiguredMidSentenceHelpcodeUppercaseTrigger();
+}
+
+std::wstring FormatEndHelpcodeTriggersWorkerPayload()
+{
+    const bool shuangpin = GetConfiguredActiveInputScheme() == SchemeType::Shuangpin;
+    return std::wstring(
+        1, FanyImeEndHelpcode::PayloadFor<wchar_t>(shuangpin && IsConfiguredEndHelpcodeTrigger(L'`'),
+                                                   shuangpin && IsConfiguredEndHelpcodeTrigger(L';'),
+                                                   shuangpin && IsConfiguredEndHelpcodeUppercaseTrigger()));
+}
+
 bool GetConfiguredShuangpinMidSentenceHelpcodeEnabled()
 {
     return g_shuangpin_mid_sentence_helpcode_enabled;
@@ -433,12 +581,7 @@ bool GetConfiguredShuangpinMidSentenceHelpcodeBacktick()
 
 bool SetConfiguredShuangpinMidSentenceHelpcodeBacktick(bool enabled)
 {
-    if (!WriteConfiguredValue("helpcode", "shuangpin_mid_sentence_helpcode_backtick", enabled ? "true" : "false"))
-    {
-        return false;
-    }
-    g_shuangpin_mid_sentence_helpcode_backtick = enabled;
-    return true;
+    return SetHelpcodeTrigger('`', false, enabled);
 }
 
 bool GetConfiguredShuangpinMidSentenceHelpcodeSemicolon()
@@ -448,12 +591,7 @@ bool GetConfiguredShuangpinMidSentenceHelpcodeSemicolon()
 
 bool SetConfiguredShuangpinMidSentenceHelpcodeSemicolon(bool enabled)
 {
-    if (!WriteConfiguredValue("helpcode", "shuangpin_mid_sentence_helpcode_semicolon", enabled ? "true" : "false"))
-    {
-        return false;
-    }
-    g_shuangpin_mid_sentence_helpcode_semicolon = enabled;
-    return true;
+    return SetHelpcodeTrigger(';', false, enabled);
 }
 
 bool GetConfiguredShuangpinMidSentenceHelpcodeUppercase()
@@ -463,12 +601,7 @@ bool GetConfiguredShuangpinMidSentenceHelpcodeUppercase()
 
 bool SetConfiguredShuangpinMidSentenceHelpcodeUppercase(bool enabled)
 {
-    if (!WriteConfiguredValue("helpcode", "shuangpin_mid_sentence_helpcode_uppercase", enabled ? "true" : "false"))
-    {
-        return false;
-    }
-    g_shuangpin_mid_sentence_helpcode_uppercase = enabled;
-    return true;
+    return SetHelpcodeTrigger('A', false, enabled);
 }
 
 bool IsConfiguredMidSentenceHelpcodeUppercaseTrigger()

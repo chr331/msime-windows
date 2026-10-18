@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <fstream>
 #include <iterator>
@@ -269,7 +270,8 @@ bool ReadColors(const toml::table *table, CandidateColors &out)
         !ReadCssColor(*table, "selected_translation_separator", out.selectedTranslationSeparator) ||
         !ReadCssColor(*table, "selected_bar", out.selectedBar) ||
         !ReadCssColor(*table, "preedit_background", out.preeditBackground) ||
-        !ReadCssColor(*table, "preedit_divider", out.preeditDivider))
+        !ReadCssColor(*table, "preedit_divider", out.preeditDivider) ||
+        !ReadCssColor(*table, "page_arrow_divider", out.pageArrowDivider))
     {
         return false;
     }
@@ -425,11 +427,321 @@ bool ReadToolbarColors(const toml::node *node, ToolbarColors &out)
            ReadCssColor(*table, "handle", out.handle) && ReadCssColor(*table, "divider", out.divider) &&
            ReadCssColor(*table, "icon", out.icon) && ReadCssColor(*table, "hover", out.hover);
 }
+
+// 长度：0–maximum 的 DIP 数值，或 "<数值>em"（0–maximumEm 倍字号）。键不存在时什么也不做。
+bool ReadLength(const toml::table &table, const char *key, double maximum, double maximumEm, std::optional<Length> &out)
+{
+    const toml::node *node = table.get(key);
+    if (!node)
+    {
+        return true;
+    }
+    if (const auto *text = node->as_string())
+    {
+        const std::string &value = text->get();
+        if (value.size() < 3 || value.compare(value.size() - 2, 2, "em") != 0)
+        {
+            return false;
+        }
+        double number = 0.0;
+        const char *first = value.data();
+        const char *last = value.data() + value.size() - 2;
+        const auto [end, ec] = std::from_chars(first, last, number);
+        if (ec != std::errc() || end != last || !std::isfinite(number) || number < 0.0 || number > maximumEm)
+        {
+            return false;
+        }
+        out = Length{number, true};
+        return true;
+    }
+    const double number = BoundedNumber(table, key, maximum);
+    if (number < 0.0)
+    {
+        return false;
+    }
+    out = Length{number, false};
+    return true;
+}
+
+bool ReadGeometry(const toml::table &table, CandidateGeometry &out)
+{
+    if (!ReadLength(table, "padding", 64.0, 4.0, out.padding) ||
+        !ReadLength(table, "item_gap", 64.0, 4.0, out.itemGap) ||
+        !ReadLength(table, "item_extra_height", 64.0, 4.0, out.itemExtraHeight) ||
+        !ReadLength(table, "number_inset", 64.0, 4.0, out.numberInset) ||
+        !ReadLength(table, "item_padding_right", 64.0, 4.0, out.itemPaddingRight) ||
+        !ReadLength(table, "item_min_width", 500.0, 40.0, out.itemMinWidth) ||
+        !ReadLength(table, "number_gap", 64.0, 4.0, out.numberGap) ||
+        !ReadLength(table, "selected_bar_width", 16.0, 1.0, out.selectedBarWidth) ||
+        !ReadOptionalBounded(table, "number_scale", 2.0, out.numberScale) ||
+        !ReadOptionalBounded(table, "selected_bar_height_em", 2.0, out.selectedBarHeightEm) ||
+        !ReadOptionalBool(table, "selected_bar_inside", out.selectedBarInside) ||
+        !ReadOptionalBool(table, "item_corners_follow_card", out.itemCornersFollowCard) ||
+        !ReadOptionalBool(table, "justify_rows", out.justifyRows) ||
+        !ReadOptionalBool(table, "trim_hidden_preedit_gap", out.trimHiddenPreeditGap) ||
+        !ReadEnum(table, "page_arrow_style", {"chevron", "triangle"}, out.pageArrowStyle))
+    {
+        return false;
+    }
+    std::vector<double> margin;
+    if (!ReadBoxValues(table, "preedit_margin_dip", margin))
+    {
+        return false;
+    }
+    if (!margin.empty())
+    {
+        // 按 CSS 简写展开：1 个值四边相同，2 个值是上下、左右，4 个值是上右下左。
+        const double top = margin[0];
+        const double right = margin.size() > 1 ? margin[1] : top;
+        const double bottom = margin.size() > 2 ? margin[2] : top;
+        const double left = margin.size() > 3 ? margin[3] : right;
+        out.preeditMarginDip = InsetsDip{top, right, bottom, left};
+    }
+    return true;
+}
+
+// 外部皮肤与内置皮肤清单共用的外观键：[candidate_window] 里的圆角、线宽、阴影与版式（含 horizontal /
+// vertical 子表），[candidate.*] 配色，[toolbar] 配色与圆角。只覆盖写了的键，所以内置清单可以叠在出厂外观上读。
+bool ReadLook(const toml::table &root, Package &package, std::string *error)
+{
+    if (const auto *window = root["candidate_window"].as_table())
+    {
+        if (window->contains("corner_radius_dip"))
+        {
+            const double radius = BoundedNumber(*window, "corner_radius_dip", 32.0);
+            if (radius < 0.0)
+            {
+                SetError(error, "candidate_window.corner_radius_dip 超出范围");
+                return false;
+            }
+            package.cornerRadiusDip = radius;
+        }
+        if (!ReadOptionalBounded(*window, "border_width_dip", 4.0, package.borderWidthDip))
+        {
+            SetError(error, "candidate_window.border_width_dip 超出范围");
+            return false;
+        }
+        if (!ReadOptionalBounded(*window, "item_corner_radius_dip", 16.0, package.itemCornerRadiusDip))
+        {
+            SetError(error, "candidate_window.item_corner_radius_dip 超出范围");
+            return false;
+        }
+        if (!ReadEnum(*window, "shadow", {"none", "soft", "strong"}, package.shadow))
+        {
+            SetError(error, "candidate_window.shadow 只能是 none、soft 或 strong");
+            return false;
+        }
+        if (const toml::node *rowsNode = window->get("expand_rows"))
+        {
+            const auto *rows = rowsNode->as_integer();
+            if (!rows || rows->get() < kMinExpandRows || rows->get() > kMaxExpandRows)
+            {
+                SetError(error, "candidate_window.expand_rows 必须是 2–8 的整数");
+                return false;
+            }
+            package.expandRows = static_cast<int>(rows->get());
+        }
+        const toml::node *horizontal = window->get("horizontal");
+        const toml::node *vertical = window->get("vertical");
+        if (!ReadGeometry(*window, package.geometry) || (horizontal && !horizontal->as_table()) ||
+            (vertical && !vertical->as_table()) ||
+            (horizontal && !ReadGeometry(*horizontal->as_table(), package.horizontalGeometry)) ||
+            (vertical && !ReadGeometry(*vertical->as_table(), package.verticalGeometry)))
+        {
+            SetError(error, "candidate_window 的版式数值无效");
+            return false;
+        }
+    }
+    const auto *candidate = root["candidate"].as_table();
+    if (candidate && (!ReadColors((*candidate)["dark"].as_table(), package.dark) ||
+                      !ReadColors((*candidate)["light"].as_table(), package.light)))
+    {
+        SetError(error, "candidate 配色无效");
+        return false;
+    }
+    if (const toml::node *toolbarNode = root.get("toolbar"))
+    {
+        const auto *toolbar = toolbarNode->as_table();
+        if (!toolbar || !ReadToolbarColors(toolbar->get("dark"), package.toolbarDark) ||
+            !ReadToolbarColors(toolbar->get("light"), package.toolbarLight))
+        {
+            SetError(error, "toolbar 配色无效");
+            return false;
+        }
+        if (toolbar->contains("corner_radius_dip"))
+        {
+            const double radius = BoundedNumber(*toolbar, "corner_radius_dip", 32.0);
+            if (radius < 0.0)
+            {
+                SetError(error, "toolbar.corner_radius_dip 超出范围");
+                return false;
+            }
+            package.toolbarCornerRadiusDip = radius;
+        }
+        if (!ReadOptionalBounded(*toolbar, "icon_corner_radius_dip", 16.0, package.toolbarIconCornerRadiusDip))
+        {
+            SetError(error, "toolbar.icon_corner_radius_dip 超出范围");
+            return false;
+        }
+    }
+    return true;
+}
+
+// 内置清单的开关：page_arrows、fit_content、expand_panel。只覆盖写了的键。
+bool ReadSwitches(const toml::table &root, DefaultSkin &skin, std::string *error)
+{
+    const toml::node *windowNode = root.get("candidate_window");
+    if (!windowNode)
+    {
+        return true;
+    }
+    const auto *window = windowNode->as_table();
+    if (!window || !ReadOptionalBool(*window, "page_arrows", skin.pageArrows))
+    {
+        SetError(error, "candidate_window.page_arrows 必须是 true 或 false");
+        return false;
+    }
+    if (!ReadOptionalBool(*window, "fit_content", skin.fitContent))
+    {
+        SetError(error, "candidate_window.fit_content 必须是 true 或 false");
+        return false;
+    }
+    if (!ReadOptionalBool(*window, "expand_panel", skin.expandPanel))
+    {
+        SetError(error, "candidate_window.expand_panel 必须是 true 或 false");
+        return false;
+    }
+    return true;
+}
+
+// 出厂清单：构建时从仓库的 skins/default/<id>/skin.toml 生成（见 server/CMakeLists.txt），内容与安装包里的一致。
+struct FactoryManifest
+{
+    const char *id;
+    const char *text;
+};
+
+constexpr FactoryManifest kFactoryManifests[] = {
+#include "builtin_skin_manifests.inc"
+};
+
+struct FactoryEntry
+{
+    Package look;
+    DefaultSkin switches;
+};
+
+const std::vector<std::pair<std::string, FactoryEntry>> &FactoryEntries()
+{
+    static const std::vector<std::pair<std::string, FactoryEntry>> entries = [] {
+        std::vector<std::pair<std::string, FactoryEntry>> parsed;
+        for (const FactoryManifest &manifest : kFactoryManifests)
+        {
+            FactoryEntry entry;
+            entry.switches.id = manifest.id;
+            try
+            {
+                const toml::table root = toml::parse(std::string_view(manifest.text));
+                (void)ReadString(root, "name", entry.switches.name, 80, false);
+                (void)ReadString(root, "description", entry.switches.description, 500, false);
+                // 出厂清单由测试保证有效；万一读不出来，那一项保持渲染器的缺省值，不影响其他皮肤。
+                Package look;
+                if (ReadLook(root, look, nullptr))
+                    entry.look = std::move(look);
+                DefaultSkin switches = entry.switches;
+                if (ReadSwitches(root, switches, nullptr))
+                    entry.switches = std::move(switches);
+            }
+            catch (const std::exception &)
+            {
+            }
+            entry.look.id = manifest.id;
+            entry.look.base = manifest.id;
+            parsed.emplace_back(manifest.id, std::move(entry));
+        }
+        return parsed;
+    }();
+    return entries;
+}
+
+const FactoryEntry *FindFactoryEntry(const std::string &id)
+{
+    for (const auto &[entryId, entry] : FactoryEntries())
+    {
+        if (entryId == id)
+            return &entry;
+    }
+    return nullptr;
+}
+
+const FactoryEntry &FactoryEntryOrFluent(const std::string &id)
+{
+    if (const FactoryEntry *entry = FindFactoryEntry(id))
+        return *entry;
+    if (const FactoryEntry *fluent = FindFactoryEntry("fluent"))
+        return *fluent;
+    static const FactoryEntry empty;
+    return empty;
+}
 } // namespace
+
+float ResolveLength(const Length &length, float fontSize)
+{
+    return length.em ? std::round(fontSize * static_cast<float>(length.value)) : static_cast<float>(length.value);
+}
+
+bool HasFactoryLook(const std::string &id)
+{
+    return FindFactoryEntry(id) != nullptr;
+}
+
+const Package &FactoryLook(const std::string &id)
+{
+    return FactoryEntryOrFluent(id).look;
+}
+
+Package ResolveBuiltInLook(const std::filesystem::path &skinsRoot, const std::string &id)
+{
+    const std::string key = HasFactoryLook(id) ? id : std::string("fluent");
+    Package look = FactoryLook(key);
+    const std::filesystem::path manifest =
+        skinsRoot / std::filesystem::u8path(kDefaultSkinsFolder) / std::filesystem::u8path(key) / L"skin.toml";
+    try
+    {
+        const std::optional<toml::table> parsed = ParseManifest(manifest);
+        if (!parsed)
+        {
+            return look;
+        }
+        // 叠在副本上读，数据目录里的清单哪一项写错了就整份不用，回到出厂外观。
+        Package overlaid = look;
+        if (ReadLook(*parsed, overlaid, nullptr))
+        {
+            return overlaid;
+        }
+    }
+    catch (const std::exception &)
+    {
+    }
+    return look;
+}
+
+DefaultSkin ResolveBuiltInInfo(const std::filesystem::path &skinsRoot, const std::string &id)
+{
+    DefaultSkin info = FactoryEntryOrFluent(id).switches;
+    if (const std::optional<DefaultSkin> data = LoadDefault(skinsRoot, id))
+    {
+        if (!data->name.empty())
+            info.name = data->name;
+        if (!data->description.empty())
+            info.description = data->description;
+    }
+    return info;
+}
 
 const std::vector<std::string> &BuiltInIds()
 {
-    static const std::vector<std::string> ids = {"fluent",       "wechat",           "graphite",
+    static const std::vector<std::string> ids = {"fluent",       "wechat",           "wechat_scroll", "graphite",
                                                  "willow_green", "autumn_osmanthus", "microsoft"};
     return ids;
 }
@@ -602,31 +914,6 @@ std::optional<Package> Load(const std::filesystem::path &skinsRoot, const std::s
                 return std::nullopt;
             }
         }
-        if (window->contains("corner_radius_dip"))
-        {
-            const double radius = BoundedNumber(*window, "corner_radius_dip", 32.0);
-            if (radius < 0.0)
-            {
-                SetError(error, "candidate_window.corner_radius_dip 超出范围");
-                return std::nullopt;
-            }
-            package.cornerRadiusDip = radius;
-        }
-        if (!ReadOptionalBounded(*window, "border_width_dip", 4.0, package.borderWidthDip))
-        {
-            SetError(error, "candidate_window.border_width_dip 超出范围");
-            return std::nullopt;
-        }
-        if (!ReadOptionalBounded(*window, "item_corner_radius_dip", 16.0, package.itemCornerRadiusDip))
-        {
-            SetError(error, "candidate_window.item_corner_radius_dip 超出范围");
-            return std::nullopt;
-        }
-        if (!ReadEnum(*window, "shadow", {"none", "soft", "strong"}, package.shadow))
-        {
-            SetError(error, "candidate_window.shadow 只能是 none、soft 或 strong");
-            return std::nullopt;
-        }
         if (!ReadEnum(*window, "backdrop", {"none", "acrylic", "mica"}, package.backdrop))
         {
             SetError(error, "candidate_window.backdrop 只能是 none、acrylic 或 mica");
@@ -645,6 +932,11 @@ std::optional<Package> Load(const std::filesystem::path &skinsRoot, const std::s
         if (!ReadOptionalBool(*window, "fit_content", package.fitContent))
         {
             SetError(error, "candidate_window.fit_content 必须是 true 或 false");
+            return std::nullopt;
+        }
+        if (!ReadOptionalBool(*window, "expand_panel", package.expandPanel))
+        {
+            SetError(error, "candidate_window.expand_panel 必须是 true 或 false");
             return std::nullopt;
         }
         if (const toml::node *backgroundNode = window->get("background"))
@@ -824,32 +1116,9 @@ std::optional<Package> Load(const std::filesystem::path &skinsRoot, const std::s
             }
         }
 
-        const auto *candidate = root["candidate"].as_table();
-        if (candidate && (!ReadColors((*candidate)["dark"].as_table(), package.dark) ||
-                          !ReadColors((*candidate)["light"].as_table(), package.light)))
+        if (!ReadLook(root, package, error))
         {
-            SetError(error, "candidate 配色无效");
             return std::nullopt;
-        }
-        if (const toml::node *toolbarNode = root.get("toolbar"))
-        {
-            const auto *toolbar = toolbarNode->as_table();
-            if (!toolbar || !ReadToolbarColors(toolbar->get("dark"), package.toolbarDark) ||
-                !ReadToolbarColors(toolbar->get("light"), package.toolbarLight))
-            {
-                SetError(error, "toolbar 配色无效");
-                return std::nullopt;
-            }
-            if (toolbar->contains("corner_radius_dip"))
-            {
-                const double radius = BoundedNumber(*toolbar, "corner_radius_dip", 32.0);
-                if (radius < 0.0)
-                {
-                    SetError(error, "toolbar.corner_radius_dip 超出范围");
-                    return std::nullopt;
-                }
-                package.toolbarCornerRadiusDip = radius;
-            }
         }
         std::error_code ec;
         if (!package.decorationImage.empty() &&
@@ -973,24 +1242,15 @@ std::optional<DefaultSkin> LoadDefault(const std::filesystem::path &skinsRoot, c
         const toml::table &root = *parsed;
         DefaultSkin skin;
         if (root["schema_version"].value_or(0) != 1 || !ReadString(root, "id", skin.id, 64, true) || skin.id != id ||
-            !ReadString(root, "name", skin.name, 80, false))
+            !ReadString(root, "name", skin.name, 80, false) ||
+            !ReadString(root, "description", skin.description, 500, false))
         {
             SetError(error, "manifest 的基本信息无效");
             return std::nullopt;
         }
-        if (const toml::node *windowNode = root.get("candidate_window"))
+        if (!ReadSwitches(root, skin, error))
         {
-            const auto *window = windowNode->as_table();
-            if (!window || !ReadOptionalBool(*window, "page_arrows", skin.pageArrows))
-            {
-                SetError(error, "candidate_window.page_arrows 必须是 true 或 false");
-                return std::nullopt;
-            }
-            if (!ReadOptionalBool(*window, "fit_content", skin.fitContent))
-            {
-                SetError(error, "candidate_window.fit_content 必须是 true 或 false");
-                return std::nullopt;
-            }
+            return std::nullopt;
         }
         return skin;
     }
@@ -1001,6 +1261,19 @@ std::optional<DefaultSkin> LoadDefault(const std::filesystem::path &skinsRoot, c
     }
 }
 
+namespace
+{
+// 开关的取值顺序：数据目录里的内置清单 → 出厂清单 → 程序缺省值。
+bool SwitchValue(const std::optional<DefaultSkin> &defaults, std::optional<bool> DefaultSkin::*field,
+                 const std::string &base, bool fallback)
+{
+    if (defaults && (*defaults).*field)
+        return *((*defaults).*field);
+    const FactoryEntry &factory = FactoryEntryOrFluent(IsBuiltIn(base) ? base : "fluent");
+    return (factory.switches.*field).value_or(fallback);
+}
+} // namespace
+
 bool ResolvePageArrows(const std::filesystem::path &skinsRoot, const std::string &skinId, const Package *package)
 {
     if (package && package->pageArrows)
@@ -1010,7 +1283,7 @@ bool ResolvePageArrows(const std::filesystem::path &skinsRoot, const std::string
     const std::string base = package ? package->base : skinId;
     // 配置里的皮肤既不是内置、也没能作为外部皮肤加载时，渲染端回退到 fluent，这里跟着回退。
     const auto defaults = LoadDefault(skinsRoot, IsBuiltIn(base) ? base : "fluent");
-    return defaults && defaults->pageArrows ? *defaults->pageArrows : kDefaultPageArrows;
+    return SwitchValue(defaults, &DefaultSkin::pageArrows, base, kDefaultPageArrows);
 }
 
 bool ResolveFitContent(const std::filesystem::path &skinsRoot, const std::string &skinId, const Package *package)
@@ -1021,6 +1294,17 @@ bool ResolveFitContent(const std::filesystem::path &skinsRoot, const std::string
     }
     const std::string base = package ? package->base : skinId;
     const auto defaults = LoadDefault(skinsRoot, IsBuiltIn(base) ? base : "fluent");
-    return defaults && defaults->fitContent ? *defaults->fitContent : kDefaultFitContent;
+    return SwitchValue(defaults, &DefaultSkin::fitContent, base, kDefaultFitContent);
+}
+
+bool ResolveExpandPanel(const std::filesystem::path &skinsRoot, const std::string &skinId, const Package *package)
+{
+    if (package && package->expandPanel)
+    {
+        return *package->expandPanel;
+    }
+    const std::string base = package ? package->base : skinId;
+    const auto defaults = LoadDefault(skinsRoot, IsBuiltIn(base) ? base : "fluent");
+    return SwitchValue(defaults, &DefaultSkin::expandPanel, base, kDefaultExpandPanel);
 }
 } // namespace CandidateSkinCatalog

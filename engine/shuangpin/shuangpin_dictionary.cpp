@@ -516,10 +516,24 @@ bool ShuangpinDictionary::expand_initial_candidates()
     return expand_initial_candidates(_pinyin_sequence, _cur_candidate_list);
 }
 
+bool ShuangpinDictionary::can_expand_initial_candidates(const std::string &code,
+                                                        const std::vector<WordItem> &candidates)
+{
+    if (code.size() != 1)
+    {
+        return false;
+    }
+    // 与 generate_for_single_char 的截断条数一致：正好截满才可能还有，展开过之后数目就不再是 24。
+    constexpr size_t kInitialCandidateLimit = 24;
+    return static_cast<size_t>(std::count_if(candidates.begin(), candidates.end(), [&](const WordItem &item) {
+               return item.source == CandidateSource::Database && item.pinyin == code;
+           })) == kInitialCandidateLimit;
+}
+
 bool ShuangpinDictionary::expand_initial_candidates(const std::string &code, std::vector<WordItem> &candidates,
                                                     const std::string &series_cache_key)
 {
-    if (code.size() != 1)
+    if (!can_expand_initial_candidates(code, candidates))
     {
         return false;
     }
@@ -529,11 +543,6 @@ bool ShuangpinDictionary::expand_initial_candidates(const std::string &code, std
     };
     const size_t limited_count =
         static_cast<size_t>(std::count_if(candidates.begin(), candidates.end(), is_limited_initial));
-    constexpr size_t kInitialCandidateLimit = 24;
-    if (limited_count != kInitialCandidateLimit)
-    {
-        return false;
-    }
 
     auto expanded = query_initial_from_quanpin_database(code, INT_MAX);
     if (expanded.size() <= limited_count)

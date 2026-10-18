@@ -451,6 +451,18 @@ SizeF CandidateList::Measure(const SizeF &availableSize)
     const bool horizontal = orientation_ == Orientation::Horizontal;
     std::vector<float> widths;
     float maxWidth = appearance_.fitContent ? 0.0f : 80.0f;
+    // 等宽网格：可用宽度按最小列宽能放下几列（不超过 gridColumns）均分，项宽取整列。
+    const bool grid = horizontal && appearance_.gridColumns > 0 && availableWidth < 100000.0f;
+    int columns = 1;
+    float cellWidth = availableWidth;
+    if (grid)
+    {
+        const float minCell = std::max(appearance_.minItemWidth, 1.0f);
+        columns = std::clamp(static_cast<int>(std::floor((availableWidth + gap) / (minCell + gap))), 1,
+                             appearance_.gridColumns);
+        cellWidth =
+            std::max((availableWidth - gap * static_cast<float>(columns - 1)) / static_cast<float>(columns), 1.0f);
+    }
     for (const auto &item : items_)
     {
         // fitContent keeps only the gap MeasureItem puts before an inline annotation.
@@ -465,7 +477,13 @@ SizeF CandidateList::Measure(const SizeF &availableSize)
         float width = appearance_.contentPadLeft + appearance_.textPadLeft +
                       std::max(EstimateTextWidth(item.label, appearance_.labelFontSize), 9.0f) + appearance_.labelGap +
                       contentWidth + appearance_.contentPadRight;
-        if (horizontal)
+        if (grid)
+        {
+            const int span =
+                std::clamp(static_cast<int>(std::ceil((width + gap) / (cellWidth + gap) - 0.001f)), 1, columns);
+            width = cellWidth * static_cast<float>(span) + gap * static_cast<float>(span - 1);
+        }
+        else if (horizontal)
             width = std::max(width, appearance_.minItemWidth);
         widths.push_back(std::min(width, availableWidth));
         maxWidth = std::max(maxWidth, width);
@@ -478,7 +496,8 @@ SizeF CandidateList::Measure(const SizeF &availableSize)
     for (size_t i = 0; i < items_.size(); ++i)
     {
         auto geometry = MeasureItem(i, horizontal ? widths[i] : verticalWidth);
-        if (horizontal && x > 0.0f && x + geometry.bounds.width > availableWidth)
+        // 网格的整列宽度是除出来的，末列可能因为浮点误差多出一点点，不能因此换行。
+        if (horizontal && x > 0.0f && x + geometry.bounds.width > availableWidth + (grid ? 0.5f : 0.0f))
         {
             y += rowHeight + gap;
             x = 0.0f;
@@ -535,7 +554,7 @@ void CandidateList::Render(DeviceResources &deviceResources)
     for (size_t index = 0; index < items_.size(); ++index)
     {
         const RectF itemRect = ItemRect(index);
-        const bool selected = index == selectedIndex_;
+        const bool selected = appearance_.selectable && index == selectedIndex_;
         const bool hovered = hoverEnabled_ && index == hoveredIndex_;
         const bool pressed = pressed_ && index == pressedIndex_;
 

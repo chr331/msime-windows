@@ -45,8 +45,8 @@ class CCompositionProcessorEngine
                                              _Out_opt_ _KEYSTROKE_STATE *pKeyState);
 
     BOOL AddVirtualKey(WCHAR wch);
-    // 句中辅助码触发键（反引号，或设置里勾了的分号）在 buffer 的 caret 处是不是编码键，规则见
-    // engine/contracts/mid_sentence_helpcode.h。分号先让给 ing 韵母。
+    // 句中辅助码或双拼末尾辅助码（间接）的触发键（反引号、分号，按 Server 发来的设置）在 buffer 的 caret 处
+    // 是不是编码键，规则见 engine/contracts/mid_sentence_helpcode.h。分号先让给 ing 韵母。
     static bool IsMidSentenceHelpcodeTriggerKey(UINT uCode, WCHAR wch, _In_reads_opt_(length) const WCHAR *buffer,
                                                 DWORD_PTR length, DWORD_PTR caret);
     // 双拼直接辅助码开着时额外收的编码键：四码后的 /，以及不看奇偶的 ; 韵母。规则见
@@ -64,7 +64,8 @@ class CCompositionProcessorEngine
     // V 模式里数字键用来输入，选词改用 Shift+数字。放在 IsVModeInputKey 之后判断：Shift+8/9
     // 打出的 * ( 在那里已经当编码键收下了。
     static bool IsVModeShiftDigitSelectionKey(UINT uCode, _In_reads_opt_(length) const WCHAR *buffer, DWORD_PTR length);
-    // 当句中辅助码触发键的分号在缓冲里记成反引号（与 Server 的 raw 一致），其余字符原样返回。
+    // 当句中辅助码触发键的分号在缓冲里记成反引号，当末尾辅助码（间接）触发键的反引号、分号记成 kEndMarker
+    // （与 Server 的 raw 一致），其余字符原样返回。
     static WCHAR NormalizeMidSentenceHelpcodeTrigger(WCHAR wch, _In_reads_opt_(length) const WCHAR *buffer,
                                                      DWORD_PTR length, DWORD_PTR caret);
     WCHAR NormalizeMidSentenceHelpcodeTrigger(WCHAR wch) const

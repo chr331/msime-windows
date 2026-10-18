@@ -56,6 +56,8 @@ class ShuangpinDictionary
         const std::string &help_codes                //
     );
     bool expand_initial_candidates();
+    // 只判断 expand_initial_candidates 的前置条件，不查库。
+    static bool can_expand_initial_candidates(const std::string &code, const std::vector<WordItem> &candidates);
     bool expand_initial_candidates(const std::string &code, std::vector<WordItem> &candidates,
                                    const std::string &series_cache_key = {});
     std::optional<WordItem> find_candidate(const std::string &key, const std::string &value);

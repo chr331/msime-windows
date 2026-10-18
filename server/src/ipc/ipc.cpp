@@ -1758,6 +1758,8 @@ void BroadcastConfiguredInputModeState(uint64_t excluded_input_mode_client_id)
     BroadcastToTsfWorkerThreadViaNamedpipe(
         Global::DataFromServerMsgTypeToTsfWorkerThread::MidSentenceHelpcodeUppercaseChanged,
         FormatMidSentenceHelpcodeUppercaseWorkerPayload());
+    BroadcastToTsfWorkerThreadViaNamedpipe(Global::DataFromServerMsgTypeToTsfWorkerThread::EndHelpcodeTriggersChanged,
+                                           FormatEndHelpcodeTriggersWorkerPayload());
     BroadcastToTsfWorkerThreadViaNamedpipe(FanyImeWorkerReplyType::TemporaryJapanesePolicyChanged,
                                            FanyNamedPipe::TemporaryJapanesePolicyPayload());
     BroadcastToTsfWorkerThreadViaNamedpipe(Global::DataFromServerMsgTypeToTsfWorkerThread::VModeChanged,

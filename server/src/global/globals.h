@@ -260,6 +260,8 @@ inline std::atomic<std::uint64_t> rendered_candidate_page_generation{0};
 // Mirrors ::is_global_wnd_cand_shown so the worker thread can cheaply tell whether an on-screen
 // candidate list exists. Kept in lockstep at every write site of the plain flag.
 inline std::atomic<bool> candidate_window_rendered_visible{false};
+// 候选窗的卷轴展开面板是否打开。界面线程写，工作线程发布候选页时据此决定要不要附带后续候选。
+inline std::atomic<bool> candidate_expand_panel_open{false};
 // Wakes a selection waiting for the render echo the moment it lands. Polling with sleep_for(1ms)
 // sleeps a whole timer tick (~15.6ms by default, worse on battery), which turned a short paint lag
 // into a 30-47ms stall inside the TSF reply budget. The mutex only orders the store against the
@@ -437,9 +439,13 @@ struct CandidatePageSnapshot
     int page_count = 0;
     int page_item_count = 0;
     // 翻页箭头的可用状态。候选是分批展开的，满页的最后一页后面可能还能展开出下一页，
-    // 所以满页时下一页箭头保持可点；真的展开不出来时翻页任务什么也不做。
+    // 所以满页且引擎还能展开首字母候选时下一页箭头保持可点；展开不了的末页满页置灰。
     bool has_previous_page = false;
     bool has_next_page = false;
+    // 卷轴展开面板打开时（candidate_expand_panel_open）才填：当前页之后的候选显示文字，
+    // 第一个的绝对下标是 expanded_start。点选时连同文字一起交回工作线程核对。
+    std::vector<std::wstring> expanded_words;
+    int expanded_start = 0;
     // Generation stamped by the worker at publish time. The UI thread echoes this exact value back
     // after painting, which is what lets a selection distinguish "what the user sees" from "what
     // the worker has just rebuilt".

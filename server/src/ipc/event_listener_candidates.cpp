@@ -255,6 +255,10 @@ std::wstring BuildUiLessCandidatePageW()
 
 namespace
 {
+// 卷轴展开面板一次最多带出的后续候选数。滚到底部时界面会请求再展开一批，
+// 已加载的候选超过这个数时只显示前面这些。
+constexpr size_t kExpandedCandidateLimit = 300;
+
 std::string BuildCurrentCandidatePage()
 {
     auto &ui = Global::candidate_ui;
@@ -477,7 +481,17 @@ void PublishBuiltCandidatePage(const std::wstring &candidate_string)
     snapshot->page_count = ui.current_page_count();
     snapshot->page_item_count = ui.cur_page_item_cnt;
     snapshot->has_previous_page = ui.has_prev_page();
-    snapshot->has_next_page = ui.has_next_page() || ui.is_current_page_full();
+    snapshot->has_next_page =
+        ui.has_next_page() || (ui.is_current_page_full() && FanyNamedPipe::CanExpandCandidatesKeepingPagePosition());
+    if (Global::candidate_expand_panel_open.load(std::memory_order_acquire) && !IsUiLessMode())
+    {
+        // 展开面板只显示文字，徽标、辅助码与译文仍只在首行（当前页）上。
+        const size_t start = static_cast<size_t>(ui.current_page_start() + ui.current_page_count());
+        const size_t end = (std::min)(ui.items.size(), start + kExpandedCandidateLimit);
+        snapshot->expanded_start = static_cast<int>(start);
+        for (size_t i = start; i < end; ++i)
+            snapshot->expanded_words.push_back(string_to_wstring(CandidateTextForOutput(ui.items[i].word)));
+    }
     // Stamp before publishing so the UI thread can echo back exactly which page it painted.
     snapshot->generation = ++Global::candidate_page_generation;
     Global::PublishCandidatePageSnapshot(std::move(snapshot));
@@ -576,6 +590,21 @@ FanyImeIpc::EnglishPlacement CurrentEnglishPlacement(const std::vector<WordItem>
     return placement;
 }
 
+namespace
+{
+bool CandidateListAcceptsExpansion()
+{
+    // 译文页、日期页是一份固定的列表，session 里再多的候选也不属于它。
+    return !IsCandidateSubPageActive() &&
+           !IsSpecialModeCompositionActive(GlobalIme::composition.raw_input_with_cases) && g_inputSession;
+}
+} // namespace
+
+bool CanExpandCandidatesKeepingPagePosition()
+{
+    return CandidateListAcceptsExpansion() && g_inputSession->can_expand_initial_candidates();
+}
+
 // Pulls the next batch of candidates out of the session without disturbing
 // where the user currently is: set_items resets the page and the selection, so
 // both are restored afterwards. Returns false when nothing more was loaded, or
@@ -583,9 +612,7 @@ FanyImeIpc::EnglishPlacement CurrentEnglishPlacement(const std::vector<WordItem>
 bool ExpandCandidatesKeepingPagePosition()
 {
     auto &ui = Global::candidate_ui;
-    // 译文页、日期页是一份固定的列表，session 里再多的候选也不属于它。
-    if (IsCandidateSubPageActive() || IsSpecialModeCompositionActive(GlobalIme::composition.raw_input_with_cases) ||
-        !g_inputSession || !g_inputSession->expand_initial_candidates())
+    if (!CandidateListAcceptsExpansion() || !g_inputSession->expand_initial_candidates())
     {
         return false;
     }
@@ -629,6 +656,31 @@ PageMoveResult MoveCandidatePage(int offset)
         return PageMoveResult::Moved;
     }
     return PageMoveResult::Unchanged;
+}
+
+int MoveToExpandedCandidate(int absolute_index, const std::wstring &expected_text)
+{
+    auto &ui = Global::candidate_ui;
+    if (ui.page_size <= 0 || expected_text.empty())
+        return -1;
+    const auto matches = [&](size_t index) {
+        return string_to_wstring(CandidateTextForOutput(ui.items[index].word)) == expected_text;
+    };
+    // 点下去之后候选可能被异步结果插队；下标对不上时按显示文字重新定位，同字取最靠前的那个。
+    size_t index = static_cast<size_t>((std::max)(absolute_index, 0));
+    if (index >= ui.items.size() || !matches(index))
+    {
+        index = 0;
+        while (index < ui.items.size() && !matches(index))
+            ++index;
+        if (index >= ui.items.size())
+            return -1;
+    }
+    ui.begin_selection();
+    ui.page_index = static_cast<int>(index) / ui.page_size;
+    ui.selected_index_in_page = static_cast<int>(index) % ui.page_size;
+    ui.clear_page();
+    return ui.selected_index_in_page;
 }
 
 std::string CandidateDatabaseKey(const WordItem &item, const std::string &context_key)

@@ -557,6 +557,11 @@ const std::vector<WordItem> &InputSession::get_candidates() const
     return candidates();
 }
 
+bool InputSession::can_expand_initial_candidates() const
+{
+    return engine_.can_expand_initial_candidates();
+}
+
 bool InputSession::expand_initial_candidates()
 {
     return engine_.expand_initial_candidates();
@@ -790,7 +795,8 @@ bool InputSession::has_active_helpcode() const
     }
     if (is_shuangpin())
     {
-        return ResolveShuangpinCompositionBase(request(), shuangpin_profile_).helpcode_length > 0;
+        return !request().end_helpcodes.empty() ||
+               ResolveShuangpinCompositionBase(request(), shuangpin_profile_).helpcode_length > 0;
     }
     return HasActiveQuanpinHelpcode(request());
 }

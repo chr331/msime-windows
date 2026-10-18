@@ -30,6 +30,8 @@ class IInputSession
     virtual void reset_sentence_cache() = 0;
 
     virtual const std::vector<WordItem> &get_candidates() const = 0;
+    // 只判断还能不能展开首字母候选，不改候选；候选窗据此决定满页末页的下一页箭头。
+    virtual bool can_expand_initial_candidates() const = 0;
     virtual bool expand_initial_candidates() = 0;
     virtual std::string get_helpcode_annotation(const std::string &word, bool uppercase_all) const = 0;
     virtual std::optional<WordItem> find_candidate(const std::string &, const std::string &)
@@ -71,6 +73,12 @@ class IInputSession
     // 光标停在 caret 处时反引号能否作为句中辅助码插进编码串，语义见 engine
     // accepts_mid_sentence_helpcode_marker_at。默认不能。
     virtual bool accepts_mid_sentence_helpcode_marker(std::size_t) const
+    {
+        return false;
+    }
+    // 光标停在 caret 处时能否开一段双拼末尾辅助码（间接），语义见 engine accepts_end_helpcode_marker_at。
+    // 默认不能。
+    virtual bool accepts_end_helpcode_marker(std::size_t) const
     {
         return false;
     }

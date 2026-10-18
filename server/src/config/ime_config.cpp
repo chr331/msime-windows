@@ -98,6 +98,10 @@ std::string g_tsf_preedit_style = "raw";
 bool g_tsf_preedit_shuangpin_quanpin = false;
 bool g_candidate_window_preedit_shuangpin_quanpin = false;
 bool g_shuangpin_helpcode_enabled = true;
+bool g_shuangpin_helpcode_direct = true;
+bool g_shuangpin_helpcode_trigger_backtick = false;
+bool g_shuangpin_helpcode_trigger_semicolon = true;
+bool g_shuangpin_helpcode_trigger_uppercase = false;
 bool g_shuangpin_mid_sentence_helpcode_enabled = false;
 bool g_shuangpin_mid_sentence_helpcode_backtick = true;
 bool g_shuangpin_mid_sentence_helpcode_semicolon = false;
@@ -201,6 +205,8 @@ bool g_smart_punctuation_direct_digit_enabled = false;
 bool g_smart_punctuation_direct_letter_enabled = false;
 bool g_smart_punctuation_repeat_to_chinese_enabled = false;
 bool g_paired_punctuation_enabled = true;
+bool g_enumeration_comma_backslash_enabled = true;
+bool g_enumeration_comma_slash_enabled = true;
 std::string g_punctuation_lock = "follow";
 std::string g_candidate_window_layout = "vertical";
 bool g_candidate_window_follow_cursor = true;
@@ -492,6 +498,12 @@ bool LoadImeConfig()
         g_wubi_fifth_code_top_commit = tbl["input"]["wubi_fifth_code_top_commit"].value_or(true);
         g_shuangpin_preedit_mode = tbl["input"]["shuangpin_preedit_mode"].value_or(std::string("quanpin"));
         g_shuangpin_helpcode_enabled = tbl["helpcode"]["shuangpin_helpcode"].value_or(true);
+        g_shuangpin_helpcode_direct = tbl["helpcode"]["shuangpin_helpcode_direct"].value_or(true);
+        g_shuangpin_helpcode_trigger_backtick = tbl["helpcode"]["shuangpin_helpcode_trigger_backtick"].value_or(false);
+        g_shuangpin_helpcode_trigger_semicolon = tbl["helpcode"]["shuangpin_helpcode_trigger_semicolon"].value_or(true);
+        g_shuangpin_helpcode_trigger_uppercase =
+            tbl["helpcode"]["shuangpin_helpcode_trigger_uppercase"].value_or(false);
+        // 三个都关是合法状态（句中辅助码把最后一个键拿走了），不补默认：补出来的键可能正被句中辅助码占着。
         g_shuangpin_mid_sentence_helpcode_enabled = tbl["helpcode"]["shuangpin_mid_sentence_helpcode"].value_or(false);
         g_shuangpin_mid_sentence_helpcode_backtick =
             tbl["helpcode"]["shuangpin_mid_sentence_helpcode_backtick"].value_or(true);
@@ -683,6 +695,14 @@ bool LoadImeConfig()
         g_smart_punctuation_repeat_to_chinese_enabled =
             tbl["input"]["smart_punctuation_repeat_to_chinese"].value_or(false);
         g_paired_punctuation_enabled = tbl["input"]["paired_punctuation"].value_or(true);
+        g_enumeration_comma_backslash_enabled = tbl["input"]["enumeration_comma_backslash"].value_or(true);
+        g_enumeration_comma_slash_enabled = tbl["input"]["enumeration_comma_slash"].value_or(true);
+        // 至少留一个出顿号的键：手改成两个都关时按默认处理。
+        if (!g_enumeration_comma_backslash_enabled && !g_enumeration_comma_slash_enabled)
+        {
+            g_enumeration_comma_backslash_enabled = true;
+            g_enumeration_comma_slash_enabled = true;
+        }
         {
             const std::string punctuation_lock = tbl["input"]["punctuation_lock"].value_or(std::string("follow"));
             g_punctuation_lock =

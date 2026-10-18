@@ -216,7 +216,7 @@ candidate_window_follow_cursor = true
 candidate_window_layout = "horizontal"
 # 横向排列时强制单行：候选窗口最宽可到当前屏幕宽度，放不下才换行；关闭时最宽为屏幕一半
 candidate_window_single_line = false
-# 候选窗口与悬浮工具栏皮肤，可选："fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft"，或外部皮肤的 id
+# 候选窗口与悬浮工具栏皮肤，可选："fluent", "wechat", "wechat_scroll", "graphite", "willow_green", "autumn_osmanthus", "microsoft"，或外部皮肤的 id
 candidate_skin = "fluent"
 # 候选窗口顶部预编辑，可选："pinyin", "empty"
 #   pinyin -> 显示分词预编辑（与候选框当前行为一致）
@@ -279,6 +279,9 @@ smart_punctuation_direct_letter = false
 smart_punctuation_repeat_to_chinese = false
 # 成对标点补全：输入左侧符号时自动补全右侧符号，并将光标置于中间
 paired_punctuation = true
+# 顿号自定义：中文标点下 \ 和 / 是否输出顿号「、」，至少保留一个；没开的键按原样输出
+enumeration_comma_backslash = true
+enumeration_comma_slash = true
 # 标点锁定，可选："follow"（随中英文切换）, "chinese"（始终中文标点）, "english"（始终英文标点）
 punctuation_lock = "follow"
 # Vim 模式：在列出的应用里，交给应用的无修饰键 Esc 同时把输入法切到英文。按可执行文件名匹配，不区分大小写，
@@ -357,11 +360,21 @@ shuangpin_helpcode = false
 shuangpin_helpcode_schema = "lantian"
 # 是否在候选窗口中显示双拼辅助码
 show_sp_helpcode_in_candidate_window = true
+# 双拼末尾辅助码直接触发：音节后直接接辅码，完整音节后多一个键是单码（如 ulpbx），末尾两键带大写是
+# 双码（如 ulpbxY）。关闭后改由下面的触发键引导（间接），不敲触发键时末尾的字母一律按拼音读
+shuangpin_helpcode_direct = true
+# 末尾辅助码间接触发时的触发键，可多选：反引号（`）、分号（;）和大写字母。触发键后接一到两个辅码，
+# 大小写均可（如 ulpb;xy）；大写字母触发时第一码敲成大写（如 ulpbXy）。辅码要在输入串末尾，一码重排、
+# 两码筛选。与句中辅助码的触发键互斥：设置页勾上一边的某个键会取消另一边的同一个键，另一边因此一个
+# 不剩时它的引导键不生效；两边都写成 true 时归句中辅助码
+shuangpin_helpcode_trigger_backtick = false
+shuangpin_helpcode_trigger_semicolon = true
+shuangpin_helpcode_trigger_uppercase = false
 # 双拼句中辅助码：在完整音节后敲反引号（`），后面的字母筛这个音节上的字。第一码大小写均可，
 # 第二码要用大写才参与筛选（如 ulpb`xY），之后可以接着打。整句候选会带着锁住的字重新打分
 shuangpin_mid_sentence_helpcode = false
 # 句中辅助码的触发键，可多选：反引号（`）和分号（;）。微软/搜狗/紫光双拼里分号还是 ing 韵母，
-# 只有在完整音节后才当触发键
+# 只有在完整音节后才当触发键。与末尾辅助码（间接）的触发键互斥，见上
 shuangpin_mid_sentence_helpcode_backtick = true
 shuangpin_mid_sentence_helpcode_semicolon = false
 # 第三种触发键：完整音节后的大写字母，相当于「反引号 + 这个字母」（如 ulpbXihfa ≡ ulpb`xihfa），

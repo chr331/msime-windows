@@ -75,6 +75,9 @@ std::shared_ptr<Dropdown> BindDropdown(PageContext &context, std::string path, s
                                        std::function<void(const std::string &value)> afterChange = {});
 std::shared_ptr<CheckOption> BindCheck(PageContext &context, std::wstring label, std::string path,
                                        std::function<void(bool checked)> afterChange = {});
+// A group of (label, path) config checkboxes where the last checked one cannot be unchecked.
+std::vector<std::shared_ptr<CheckOption>> AtLeastOneChecks(
+    PageContext &context, const std::vector<std::pair<std::wstring, std::string>> &items);
 // Writes on commit (blur / Enter), like the page's `change` listeners.
 std::shared_ptr<TextField> BindText(PageContext &context, std::string path, TextField::Options options);
 std::shared_ptr<NumberStepper> BindStepper(PageContext &context, std::string path, int minimum, int maximum,

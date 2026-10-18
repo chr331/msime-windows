@@ -3,80 +3,50 @@
 #include "skin/candidate_skin_catalog.h"
 #include "window/candidate_skin_palette.h"
 
-FloatingToolbarSkin ResolveFloatingToolbarSkin(const std::string &skinId, bool light)
+namespace
 {
-    // The default skin: the base every other skin starts from. The handle is Fluent's accent, the colour of its
-    // selection bar and caret.
-    FloatingToolbarSkin skin = light ? FloatingToolbarSkin{CandidateColorFromRgb(0xFFFFFF),
-                                                           D2D1::ColorF(0, 0.12f),
-                                                           CandidateColorFromRgb(0x1A1A1A),
-                                                           D2D1::ColorF(0, 0.08f),
-                                                           D2D1::ColorF(0, 0.12f),
-                                                           CandidateColorFromRgb(0x6B69D6),
-                                                           8.0f,
-                                                           6.0f}
-                                     : FloatingToolbarSkin{CandidateColorFromRgb(0x1A1A1A),
-                                                           D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.15f),
-                                                           CandidateColorFromRgb(0xFFFFFF),
-                                                           D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.10f),
-                                                           D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.15f),
-                                                           CandidateColorFromRgb(0x6B69D6),
-                                                           8.0f,
-                                                           6.0f};
-    if (skinId == "wechat")
-    {
-        skin.fill = CandidateColorFromRgb(light ? 0xF7F7F7 : 0x151515);
-        skin.border = CandidateColorFromRgb(light ? 0xDEDEDE : 0x292929);
-        skin.handle = CandidateColorFromRgb(0x07C160);
-        skin.hover = CandidateColorFromRgb(0x07C160, light ? 0.12f : 0.16f);
-    }
-    else if (skinId == "graphite")
-    {
-        skin.fill = CandidateColorFromRgb(light ? 0xFBFBFC : 0x1C1F23);
-        skin.border = CandidateColorFromRgb(light ? 0xE2E5E9 : 0x30353B);
-        skin.glyph = CandidateColorFromRgb(light ? 0x374151 : 0xD7DCE2);
-        skin.handle = CandidateColorFromRgb(light ? 0x5F6B7A : 0x8993A0);
-        skin.divider = light ? CandidateColorFromRgb(0x1F2937, 0.10f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.10f);
-        skin.hover = light ? CandidateColorFromRgb(0x1F2937, 0.055f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.055f);
-        skin.radius = 4.0f;
-        skin.iconRadius = 3.0f;
-    }
-    else if (skinId == "willow_green")
-    {
-        skin.fill = CandidateColorFromRgb(light ? 0xF4F5F3 : 0x2D2F2E);
-        skin.border = CandidateColorFromRgb(light ? 0xDFE3DF : 0x3B3E3C);
-        skin.handle = CandidateColorFromRgb(light ? 0x58B980 : 0x65C98D);
-        skin.hover = light ? CandidateColorFromRgb(0x58B980, 0.16f) : CandidateColorFromRgb(0x65C98D, 0.20f);
-        skin.radius = 9.0f;
-    }
-    else if (skinId == "autumn_osmanthus")
-    {
-        skin.fill = CandidateColorFromRgb(light ? 0xD6ECF0 : 0x7D929F);
-        skin.border = CandidateColorFromRgb(light ? 0xBCD8DE : 0x8FA3AF);
-        skin.handle = CandidateColorFromRgb(light ? 0xE6A817 : 0xF97D0A);
-        skin.hover = light ? CandidateColorFromRgb(0xFFE399, 0.70f) : CandidateColorFromRgb(0xF97D0A, 0.28f);
-        skin.radius = 10.0f;
-    }
-    else if (skinId == "microsoft")
-    {
-        // 其余沿用默认（Fluent）工具栏，只有拖拽条跟候选框选中条同为紫色。
-        skin.handle = CandidateColorFromRgb(0xE183D9);
-    }
-    return skin;
-}
-
-void ApplyFloatingToolbarSkinOverrides(FloatingToolbarSkin &skin, const CandidateSkinCatalog::Package &package,
-                                       bool light)
+void ApplyToolbarLayer(FloatingToolbarSkin &skin, const CandidateSkinCatalog::Package &layer, bool light)
 {
-    const CandidateSkinCatalog::ToolbarColors &colors = light ? package.toolbarLight : package.toolbarDark;
+    const CandidateSkinCatalog::ToolbarColors &colors = light ? layer.toolbarLight : layer.toolbarDark;
     skin.fill = ParseCandidateCssColor(colors.background, skin.fill);
     skin.border = ParseCandidateCssColor(colors.border, skin.border);
     skin.handle = ParseCandidateCssColor(colors.handle, skin.handle);
     skin.divider = ParseCandidateCssColor(colors.divider, skin.divider);
     skin.glyph = ParseCandidateCssColor(colors.icon, skin.glyph);
     skin.hover = ParseCandidateCssColor(colors.hover, skin.hover);
-    if (package.toolbarCornerRadiusDip)
+    if (layer.toolbarCornerRadiusDip)
     {
-        skin.radius = static_cast<float>(*package.toolbarCornerRadiusDip);
+        skin.radius = static_cast<float>(*layer.toolbarCornerRadiusDip);
     }
+    if (layer.toolbarIconCornerRadiusDip)
+    {
+        skin.iconRadius = static_cast<float>(*layer.toolbarIconCornerRadiusDip);
+    }
+}
+} // namespace
+
+FloatingToolbarSkin ResolveFloatingToolbarSkin(const CandidateSkinCatalog::Package &baseLook, bool light)
+{
+    // 配色与圆角都来自基底清单的 [toolbar]；清单没写的项（不该发生）退回不透明的中性色。
+    FloatingToolbarSkin skin{CandidateColorFromRgb(light ? 0xFFFFFF : 0x1A1A1A),
+                             light ? D2D1::ColorF(0, 0.12f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.15f),
+                             CandidateColorFromRgb(light ? 0x1A1A1A : 0xFFFFFF),
+                             light ? D2D1::ColorF(0, 0.08f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.10f),
+                             light ? D2D1::ColorF(0, 0.12f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.15f),
+                             CandidateColorFromRgb(0x6B69D6),
+                             8.0f,
+                             6.0f};
+    ApplyToolbarLayer(skin, baseLook, light);
+    return skin;
+}
+
+FloatingToolbarSkin ResolveFloatingToolbarSkin(const std::string &skinId, bool light)
+{
+    return ResolveFloatingToolbarSkin(CandidateSkinCatalog::FactoryLook(skinId), light);
+}
+
+void ApplyFloatingToolbarSkinOverrides(FloatingToolbarSkin &skin, const CandidateSkinCatalog::Package &package,
+                                       bool light)
+{
+    ApplyToolbarLayer(skin, package, light);
 }

@@ -153,9 +153,11 @@ bool IsMicrosoftShuangpinIngKeyAt(UINT keycode, WCHAR wch, const std::string &ra
     {
         return FanyImeDirectHelpcode::AcceptsSemicolonFinalAt(raw_input.data(), raw_input.size(), caret);
     }
-    // 句中辅助码的大写触发生效时大写段不算这一节的键；关着时就是原来「最后一个 ' 之后数奇偶」。TSF 同规则。
-    return FanyImeMidSentenceHelpcode::AcceptsSemicolonFinalAt(raw_input.data(), raw_input.size(), caret,
-                                                               IsConfiguredMidSentenceHelpcodeUppercaseTrigger());
+    // 句中辅助码或末尾辅助码的大写触发生效时大写段不算这一节的键，末尾段同样不算；都没有时就是原来「最后一个 '
+    // 之后数奇偶」。TSF 同规则。
+    return FanyImeMidSentenceHelpcode::AcceptsSemicolonFinalAt(
+        raw_input.data(), raw_input.size(), caret,
+        {IsConfiguredMidSentenceHelpcodeUppercaseTrigger(), IsConfiguredEndHelpcodeUppercaseTrigger()});
 }
 
 // 双拼直接辅助码四码后的 /：光标前是「两键音节 + 两位辅码」的形状时它是编码键而不是标点。TSF 按同一条
@@ -242,6 +244,30 @@ bool IsMidSentenceHelpcodeMarkerKey(UINT keycode, WCHAR wch, const std::string &
         return false;
     }
     return g_inputSession->accepts_mid_sentence_helpcode_marker(caret);
+}
+
+// 双拼末尾辅助码（间接）的触发键（反引号或分号，按设置里勾选的、且没被句中辅助码占着的）：开关开着、
+// 关着直接触发、双拼，且光标在输入串末尾、前面是一个个完整音节时，它是编码键而不是标点，输入串里一律
+// 记成 FanyImeMidSentenceHelpcode::kEndMarker。TSF 按同一条形状规则（AcceptsEndMarkerAt）预判吃键；
+// 分号同样先让给 ing 韵母。
+bool IsEndHelpcodeMarkerKey(UINT keycode, WCHAR wch, const std::string &raw_input)
+{
+    const bool backtick = keycode == VK_OEM_3 && wch == L'`';
+    const bool semicolon = keycode == VK_OEM_1 && wch == L';';
+    if ((!backtick && !semicolon) || !IsConfiguredEndHelpcodeTrigger(wch) || g_english_input_mode ||
+        g_inputSession == nullptr)
+    {
+        return false;
+    }
+    const auto &composition = GlobalIme::composition;
+    const size_t caret = composition.raw_input_with_cases != raw_input && composition.caret_position == 0
+                             ? raw_input.size()
+                             : (std::min)(composition.caret_position, raw_input.size());
+    if (semicolon && IsMicrosoftShuangpinIngKeyAt(keycode, wch, raw_input, caret))
+    {
+        return false;
+    }
+    return g_inputSession->accepts_end_helpcode_marker(caret);
 }
 
 bool IsSelectionKey(UINT keycode)
@@ -458,6 +484,10 @@ bool ApplyCompositionEditKey(UINT keycode, WCHAR wch, UINT modifiers_down, bool 
         else if (IsMidSentenceHelpcodeMarkerKey(keycode, wch, raw))
         {
             input = '`';
+        }
+        else if (IsEndHelpcodeMarkerKey(keycode, wch, raw))
+        {
+            input = FanyImeMidSentenceHelpcode::kEndMarker;
         }
         else if (IsDirectHelpcodeSlashKey(keycode, wch, raw))
         {
@@ -1155,8 +1185,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     const bool is_manual_pinyin_separator = IsManualPinyinSeparatorKey(Global::Keycode, Global::Wch);
     const bool is_microsoft_shuangpin_ing_key =
         IsMicrosoftShuangpinIngKey(Global::Keycode, Global::Wch, input_before_key);
+    // 句中辅助码与末尾辅助码（间接）的引导键在这之后的判断里待遇相同：只进输入串。
     const bool is_mid_sentence_helpcode_marker =
-        IsMidSentenceHelpcodeMarkerKey(Global::Keycode, Global::Wch, input_before_key);
+        IsMidSentenceHelpcodeMarkerKey(Global::Keycode, Global::Wch, input_before_key) ||
+        IsEndHelpcodeMarkerKey(Global::Keycode, Global::Wch, input_before_key);
     const bool is_direct_helpcode_slash = IsDirectHelpcodeSlashKey(Global::Keycode, Global::Wch, input_before_key);
     const bool is_date_time_input_key = IsDateTimeInputKey(Global::Keycode, Global::Wch, input_before_key);
     // V 模式的数字和 . + - * / ( )：只进输入串，不选词、不翻页、不当标点。

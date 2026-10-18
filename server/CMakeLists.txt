@@ -30,6 +30,28 @@ set(MSIME_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(MSIME_ENGINE_DIR "${MSIME_REPO_ROOT}/engine")
 set(MSIME_VENDOR_DIR "${MSIME_REPO_ROOT}/vendor")
 
+# 内置皮肤的出厂清单（skins/default/<id>/skin.toml）编进程序：数据目录里那一份缺失或写坏时，
+# 外观仍按出厂清单画。清单是唯一的来源，这里只把它们原样嵌成字符串；改了清单会触发重新配置。
+set(MSIME_FACTORY_SKIN_IDS fluent wechat wechat_scroll graphite willow_green autumn_osmanthus microsoft canvas)
+set(MSIME_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+set(_msime_factory_skins "")
+foreach(_skin_id IN LISTS MSIME_FACTORY_SKIN_IDS)
+    set(_skin_manifest "${MSIME_REPO_ROOT}/skins/default/${_skin_id}/skin.toml")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_skin_manifest}")
+    file(READ "${_skin_manifest}" _skin_text)
+    string(APPEND _msime_factory_skins "{\"${_skin_id}\", R\"msimeskin(${_skin_text})msimeskin\"},\n")
+endforeach()
+# 只在内容变了时才写，免得每次配置都让皮肤目录的编译单元重编。
+set(_msime_factory_skins_file "${MSIME_GENERATED_DIR}/builtin_skin_manifests.inc")
+set(_msime_factory_skins_old "")
+if(EXISTS "${_msime_factory_skins_file}")
+    file(READ "${_msime_factory_skins_file}" _msime_factory_skins_old)
+endif()
+if(NOT _msime_factory_skins_old STREQUAL _msime_factory_skins)
+    file(WRITE "${_msime_factory_skins_file}" "${_msime_factory_skins}")
+endif()
+include_directories("${MSIME_GENERATED_DIR}")
+
 # Boost
 # An explicit -DBoost_ROOT wins, then BOOST_ROOT from the environment, and only then the scoop
 # layout under the current user's profile. The fallback used to name one developer's home directory,
@@ -275,6 +297,10 @@ set(SRC_FILES
     "./src/window/candidate_skin_overlay.h"
     "./src/window/candidate_skin_palette.cpp"
     "./src/window/candidate_skin_palette.h"
+    "./src/window/candidate_skin_scene.cpp"
+    "./src/window/candidate_skin_scene.h"
+    "./src/window/candidate_skin_tokens.cpp"
+    "./src/window/candidate_skin_tokens.h"
     "./src/window/tray_menu_presenter.cpp"
     "./src/window/tray_menu_presenter.h"
     "./src/window/floating_toolbar_presenter.cpp"
@@ -499,6 +525,17 @@ add_executable(${SETTINGS_EXECUTABLE_NAME} WIN32
     "./src/skin/candidate_skin_catalog.h"
     "./src/window/candidate_skin_layers.cpp"
     "./src/window/candidate_skin_layers.h"
+    # 皮肤预览与候选窗共用同一套场景与皮肤解析，画出来的才一模一样。
+    "./src/window/candidate_skin_overlay.cpp"
+    "./src/window/candidate_skin_overlay.h"
+    "./src/window/candidate_skin_palette.cpp"
+    "./src/window/candidate_skin_palette.h"
+    "./src/window/candidate_skin_scene.cpp"
+    "./src/window/candidate_skin_scene.h"
+    "./src/window/candidate_skin_tokens.cpp"
+    "./src/window/candidate_skin_tokens.h"
+    "./src/window/floating_toolbar_skin.cpp"
+    "./src/window/floating_toolbar_skin.h"
     "./src/settings/dictionary_manager.cpp"
     "./src/settings/dictionary_manager.h"
     "./src/settings/dictionary_validation.cpp"

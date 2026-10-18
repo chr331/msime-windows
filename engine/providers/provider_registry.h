@@ -13,6 +13,7 @@ class ProviderRegistry
                               metasequoia::RuntimePaths paths = metasequoia::RuntimePaths::legacy());
     ICandidateProvider &resolve(SchemeType scheme_type);
     std::optional<WordItem> find_candidate(SchemeType scheme_type, const std::string &key, const std::string &value);
+    bool can_expand_initial_candidates(const QueryRequest &request, const std::vector<WordItem> &candidates) const;
     bool expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates);
     // 双拼直接辅助码只出在拼音 provider 上，见 PinyinCandidateProvider::resolve_direct_helpcode。
     bool resolve_direct_helpcode(QueryRequest &request)

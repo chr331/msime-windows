@@ -65,6 +65,28 @@ bool IsSystemCtrlSpaceToggleHeld()
     return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 && (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0 &&
            (GetAsyncKeyState(VK_MENU) & 0x8000) == 0;
 }
+
+// \ and / produce 、 as configured (engine/contracts/enumeration_comma.h). Returns false for
+// any other key, which then goes through the punctuation tables.
+bool ResolveEnumerationCommaKey(WCHAR wch, _Out_ bool *isEnumerationComma)
+{
+    unsigned bit = 0;
+    if (wch == L'\\')
+    {
+        bit = FanyImeEnumerationComma::kBackslash;
+    }
+    else if (wch == L'/')
+    {
+        bit = FanyImeEnumerationComma::kSlash;
+    }
+    else
+    {
+        *isEnumerationComma = false;
+        return false;
+    }
+    *isEnumerationComma = (Global::EnumerationCommaKeys.load(std::memory_order_relaxed) & bit) != 0;
+    return true;
+}
 } // namespace
 
 //+---------------------------------------------------------------------------
@@ -75,6 +97,12 @@ bool IsSystemCtrlSpaceToggleHeld()
 
 BOOL CCompositionProcessorEngine::IsPunctuation(WCHAR wch)
 {
+    bool isEnumerationComma = false;
+    if (ResolveEnumerationCommaKey(wch, &isEnumerationComma))
+    {
+        return isEnumerationComma ? TRUE : FALSE;
+    }
+
     for (int i = 0; i < ARRAYSIZE(Global::PunctuationTable); i++)
     {
         if (Global::PunctuationTable[i]._Code == wch)
@@ -117,6 +145,12 @@ BOOL CCompositionProcessorEngine::IsPunctuation(WCHAR wch)
 
 const WCHAR *CCompositionProcessorEngine::GetPunctuation(WCHAR wch)
 {
+    bool isEnumerationComma = false;
+    if (ResolveEnumerationCommaKey(wch, &isEnumerationComma))
+    {
+        return isEnumerationComma ? L"、" : nullptr;
+    }
+
     for (int i = 0; i < ARRAYSIZE(Global::PunctuationTable); i++)
     {
         if (Global::PunctuationTable[i]._Code == wch)

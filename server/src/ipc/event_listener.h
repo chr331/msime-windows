@@ -68,6 +68,11 @@ void NoteCandidateUiInteraction(uint64_t page_generation);
 // into a page task already queued for the same client, so spinning the wheel
 // cannot outrun the worker with a long run of engine-backed page moves.
 void EnqueueCandidateUiPaging(CandidateUiAction action, int steps);
+// 卷轴展开面板里点选了一个候选：absolute_index 是它在整份候选里的下标，expected_text 是界面上
+// 显示的文字。工作线程先核对两者，顺序变了就按文字重新找，找不到就什么也不做。
+void EnqueueCandidateUiCommitAt(int absolute_index, std::wstring expected_text);
+// 卷轴展开面板打开或滚到底部：向会话再要一批候选，并重新发布带后续候选的候选页。
+void EnqueueCandidateUiExpand();
 void EnqueuePipeSessionInvalidatedTask(uint64_t client_id, uint64_t invalidation_epoch);
 void EnqueueReloadInputSessionTask();
 void EnqueueEnsureInputSessionMatchesConfigTask();

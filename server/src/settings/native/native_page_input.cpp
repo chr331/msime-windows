@@ -1347,7 +1347,7 @@ struct InputPage
         bool ok = false;
         if (provider == "ai")
         {
-            text = L"请先在 AI 辅助页面填写接口地址、Token 和模型";
+            text = L"请先在「AI 与云联想」页面填写接口地址、Token 和模型";
             ok = AiUsable();
         }
         else if (provider == "custom")
@@ -1669,20 +1669,6 @@ VisualPtr BuildInputPage(PageContext &context)
                                false);
     }
 
-    // ---- 翻页方式 ----
-    {
-        auto list = OptionList({BindCheck(context, L"- / =", "general.paging_minus_equal"),
-                                BindCheck(context, L", / .", "general.paging_comma_period"),
-                                BindCheck(context, L"[ / ]", "general.paging_brackets"),
-                                BindCheck(context, L"Shift+Tab / Tab", "general.paging_tab"),
-                                BindCheck(context, L"PageUp / PageDown", "general.paging_page_up_down"),
-                                BindCheck(context, L"上 / 下（移动候选项）", "general.candidate_arrow_navigation"),
-                                BindCheck(context, L"鼠标滚轮", "general.paging_mouse_wheel")});
-        list->Add(
-            Description(L"滚轮翻页依赖系统设置「当我悬停在非活动窗口上方时滚动它们」，该项关闭时滚轮不会到达候选窗口"));
-        page.AddSection(Col({MakeTitle(L"翻页方式"), list}));
-    }
-
     // ---- 输入纠错 ----
     page.AddSection(
         Col({MakeTitleBlock(
@@ -1802,9 +1788,9 @@ VisualPtr BuildInputPage(PageContext &context)
                                                    L"API Key（可选，以 Bearer Token 发送）", L"留空表示不鉴权", true),
                                              true}}))});
         s->aiSummary = std::make_shared<ApiField>(L"当前服务商与模型", L"未配置", false, true);
-        auto ai =
-            Col({heading(L"复用 AI 辅助配置", L"使用 AI 辅助页当前服务商的接口地址、Token 与模型，无需在此重复填写"),
-                 blockInput(grid({{s->aiSummary, true}}))});
+        auto ai = Col(
+            {heading(L"复用 AI 辅助配置", L"使用「AI 与云联想」页当前服务商的接口地址、Token 与模型，无需在此重复填写"),
+             blockInput(grid({{s->aiSummary, true}}))});
         s->providerFields["tencent"] = std::make_shared<Hideable>(tencent, true);
         s->providerFields["niutrans"] = std::make_shared<Hideable>(niutrans, false);
         s->providerFields["custom"] = std::make_shared<Hideable>(custom, false);
@@ -1882,6 +1868,17 @@ VisualPtr BuildInputPage(PageContext &context)
                              OptionList({follow, chinese, english})}));
     }
 
+    // ---- 顿号自定义 ----
+    {
+        std::vector<VisualPtr> keys;
+        for (auto &check : AtLeastOneChecks(context, {{L"\\ 反斜杠", "input.enumeration_comma_backslash"},
+                                                      {L"/ 斜杠", "input.enumeration_comma_slash"}}))
+            keys.push_back(check);
+        page.AddSection(Col({MakeTitle(L"顿号自定义"),
+                             Description(L"中文标点状态下用哪些键输出顿号「、」，至少保留一个；未勾选的键按原样输出"),
+                             OptionList(keys)}));
+    }
+
     // ---- 智能标点 ----
     {
         auto master = BindToggle(context, "input.smart_punctuation");
@@ -1917,7 +1914,6 @@ VisualPtr BuildInputPage(PageContext &context)
     page.AddSection(MakeRow(
         L"简繁输入", L"",
         BindDropdown(context, "input.character_set", Options({{"simplified", L"简体"}, {"traditional", L"繁体"}}))));
-    page.AddSection(MakeRow(L"云候选", L"", Toggle(context, "general.cloud_candidates")));
 
     // ---- 整句候选 ----
     {

@@ -120,6 +120,8 @@ set(TEST_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_non_ascii_path_contract.cpp"
     "${CMAKE_SOURCE_DIR}/src/skin/candidate_skin_catalog.cpp"
     "${CMAKE_SOURCE_DIR}/src/window/candidate_skin_palette.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/test_candidate_skin_tokens.cpp"
+    "${CMAKE_SOURCE_DIR}/src/window/candidate_skin_tokens.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_candidate_skin_layers.cpp"
     "${CMAKE_SOURCE_DIR}/src/window/candidate_skin_layers.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_floating_toolbar_skin.cpp"

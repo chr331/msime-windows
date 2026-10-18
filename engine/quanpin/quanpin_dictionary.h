@@ -72,6 +72,8 @@ class QuanpinDictionary
     std::vector<WordItem> query(const std::string &raw_input, const std::string &segmentation = "",
                                 unsigned autocorrect_types = 0, metasequoia::FuzzyPinyinOptions fuzzy = {});
     std::vector<WordItem> fuzzy_candidates(const std::string &segmentation, metasequoia::FuzzyPinyinOptions options);
+    // 只判断 expand_initial_candidates 的前置条件，不查库；库里恰好只有 24 条时它仍会展开失败。
+    static bool can_expand_initial_candidates(const std::string &code, const std::vector<WordItem> &candidates);
     bool expand_initial_candidates(const std::string &code, std::vector<WordItem> &candidates);
     std::optional<WordItem> find_candidate(const std::string &key, const std::string &value);
     int handleVkCode(ImeKeyCode vk, ImeModifierMask modifiers_down, ImeCharacter wch = 0);

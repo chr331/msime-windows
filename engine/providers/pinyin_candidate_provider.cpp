@@ -43,6 +43,20 @@ bool PinyinCandidateProvider::resolve_direct_helpcode(QueryRequest &request)
     return request.scheme == SchemeType::Shuangpin && shuangpin_engine_.resolve_direct_helpcode(request);
 }
 
+bool PinyinCandidateProvider::can_expand_initial_candidates(const QueryRequest &request,
+                                                            const std::vector<WordItem> &candidates) const
+{
+    if (request.scheme == SchemeType::Shuangpin)
+    {
+        return shuangpin_engine_.can_expand_initial_candidates(request, candidates);
+    }
+    if (request.scheme == SchemeType::Quanpin)
+    {
+        return quanpin_engine_.can_expand_initial_candidates(request, candidates);
+    }
+    return false;
+}
+
 bool PinyinCandidateProvider::expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates)
 {
     bool expanded = false;

@@ -234,7 +234,7 @@ KeyResult InputSession::insert_at_caret(char character)
                 accepted = direct_helpcode_enabled_
                                ? FanyImeDirectHelpcode::AcceptsSemicolonFinalAt(text.data(), text.size(), caret)
                                : FanyImeMidSentenceHelpcode::AcceptsSemicolonFinalAt(
-                                     text.data(), text.size(), caret, engine_.mid_sentence_uppercase_trigger_active());
+                                     text.data(), text.size(), caret, engine_.helpcode_uppercase_triggers());
             }
             if (character == '/')
                 accepted = accepts_direct_helpcode_slash_at(caret);
@@ -243,6 +243,8 @@ KeyResult InputSession::insert_at_caret(char character)
             // 光标移回句中补句中辅助码：反引号和它后面的码按光标前的部分判断。
             if (character == shuangpin::kMidSentenceHelpcodeMarker)
                 accepted = accepts_mid_sentence_helpcode_marker_at(caret);
+            else if (character == shuangpin::kEndHelpcodeMarker)
+                accepted = accepts_end_helpcode_marker_at(caret);
             else if (upper && !accepted)
                 accepted = accepts_mid_sentence_code_at(caret, character);
             break;

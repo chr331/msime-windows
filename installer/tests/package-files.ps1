@@ -44,7 +44,8 @@ try {
         'neural-model/NOTICE.md',
         'server/assets/settings/arrow.svg',
         'server/assets/settings/sidebar/about.svg',
-        'skins/default/fluent/skin.toml'
+        'skins/default/fluent/skin.toml',
+        'skins/default/canvas/skin.toml'
     )) { Write-Fixture $file }
     Write-Fixture 'skins/demo-skin/skin.toml' "schema_version = 1`nid = `"demo-skin`"`n"
     Write-Fixture 'skins/demo-skin/assets/background.png' 'png'
@@ -97,9 +98,11 @@ try {
     # 它若经 app_data 暂存，就得进 IsShippedAppDataItem 名单，卸载会把整个 skins 带走。
     if (Test-Path (Join-Path $installer 'app_data/skins')) { throw 'Default skin settings were staged under app_data' }
     $issText = [IO.File]::ReadAllText((Join-Path $installer 'msime_setup.iss'))
-    if ($issText -notmatch '(?s)Source: "\{#MySourceRoot\}\\default_skins\\\*";[^\r\n]*\\\s*DestDir: "\{code:GetDataDir\}\\skins\\default";[^\r\n]*\\\s*Flags: onlyifdoesntexist') {
-        throw 'Default skin settings must be installed to skins\default with onlyifdoesntexist'
+    # 内置皮肤清单承载出厂外观，每次安装都要整份覆盖，否则老用户永远拿不到外观修正。
+    if ($issText -notmatch '(?s)Source: "\{#MySourceRoot\}\\default_skins\\\*";[^\r\n]*\\\s*DestDir: "\{code:GetDataDir\}\\skins\\default";[^\r\n]*\\\s*Flags: ignoreversion') {
+        throw 'Default skin manifests must be installed to skins\default with ignoreversion (overwritten on every install)'
     }
+    if (-not (Test-Path (Join-Path $installer 'default_skins/canvas/skin.toml'))) { throw 'Missing packaged file: default_skins/canvas/skin.toml' }
     # 仓库 skins\ 下的外部皮肤随包分发；素材授权未核实的不进包，skins\default 走上面那条。
     foreach ($file in @('bundled_skins/demo-skin/skin.toml', 'bundled_skins/demo-skin/assets/background.png')) {
         if (-not (Test-Path (Join-Path $installer $file))) { throw "Missing bundled skin file: $file" }

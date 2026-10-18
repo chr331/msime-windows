@@ -755,6 +755,12 @@ void test_runtime_isolation()
                     "Incremental decoder search diverged from a fresh search");
         }
 
+        // 末尾半音节让同一个词经两种读音各出一次（zan'l 的「赞了」= zan'le / zan'liao），且第一份
+        // 恰是整句候选时，upstream 的去重曾在一个都没留下时写 lma_buf[-1]，Server 随即崩溃。
+        // Debug 构建里由 matrixsearch.cpp 的 remain_num > 0 断言拦住。
+        for (const char *input : {"zan'l", "zanl", "zan'le", "zan'l"})
+            (void)decoder_a.sentence(input);
+
         // 句中辅助码：约束在解码器建格子时生效，被锁住的字带着上下文重新整句解码；约束不能
         // 漏到之后不带约束的增量搜索里。
         const std::string plain = decoder_a.sentence("ni'hao");

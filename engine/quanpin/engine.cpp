@@ -79,21 +79,42 @@ std::vector<WordItem> QuanpinEngine::query(const QueryRequest &request)
                              request.fuzzy_pinyin);
 }
 
-bool QuanpinEngine::expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates)
+namespace
+{
+// 能展开首字母候选时返回那个首字母，否则返回空串。
+std::string expandable_initial_code(const QueryRequest &request)
 {
     if (request.scheme != SchemeType::Quanpin ||
         (request.enable_quanpin_helpcode &&
          quanpin::detect_active_helpcode_length(request.raw_input, request.raw_input_with_cases) > 0))
     {
-        return false;
+        return {};
     }
 
     const auto segments = quanpin::split_segments(request.segmentation);
     if (segments.empty() || segments.front().size() != 1)
     {
+        return {};
+    }
+    return segments.front();
+}
+} // namespace
+
+bool QuanpinEngine::can_expand_initial_candidates(const QueryRequest &request,
+                                                  const std::vector<WordItem> &candidates) const
+{
+    const std::string code = expandable_initial_code(request);
+    return !code.empty() && QuanpinDictionary::can_expand_initial_candidates(code, candidates);
+}
+
+bool QuanpinEngine::expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates)
+{
+    const std::string code = expandable_initial_code(request);
+    if (code.empty())
+    {
         return false;
     }
-    return dictionary_.expand_initial_candidates(segments.front(), candidates);
+    return dictionary_.expand_initial_candidates(code, candidates);
 }
 
 int QuanpinEngine::handleVkCode(ImeKeyCode vk, ImeModifierMask modifiers_down, ImeCharacter wch)

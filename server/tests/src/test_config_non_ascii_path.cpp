@@ -1207,6 +1207,62 @@ TEST_CASE(shipped_template_carries_smart_punctuation_conversion_keys)
     REQUIRE(!parsed["input"]["smart_punctuation_repeat_to_chinese"].value_or(true));
 }
 
+// 顿号自定义：\ 和 / 默认都出顿号，至少留一个（setter 拒绝关掉最后一个，手改成两个都关时按默认读），
+// 往返落盘，出厂模板带着两个键。
+TEST_CASE(enumeration_comma_keys_default_and_keep_at_least_one)
+{
+    namespace fs = std::filesystem;
+    const fs::path unique_root =
+        fs::temp_directory_path() / (L"msime-顿号键测试-" + std::to_wstring(GetCurrentProcessId()));
+    const fs::path local_app_data = unique_root / L"profile";
+    const fs::path data_dir = local_app_data / L"metasequoiaime";
+
+    std::error_code ec;
+    fs::remove_all(unique_root, ec);
+
+    SeedTemplate(data_dir);
+
+    {
+        ScopedConfigLocation local_app_data_env(local_app_data);
+
+        InitImeConfig();
+        REQUIRE(GetConfiguredEnumerationCommaBackslashEnabled());
+        REQUIRE(GetConfiguredEnumerationCommaSlashEnabled());
+        REQUIRE(FormatEnumerationCommaWorkerPayload() == L"3");
+
+        REQUIRE(SetConfiguredEnumerationCommaSlashEnabled(false));
+        REQUIRE(FormatEnumerationCommaWorkerPayload() == L"1");
+        // 只剩 \ 时关不掉它。
+        REQUIRE(!SetConfiguredEnumerationCommaBackslashEnabled(false));
+        REQUIRE(GetConfiguredEnumerationCommaBackslashEnabled());
+
+        InitImeConfig();
+        REQUIRE(GetConfiguredEnumerationCommaBackslashEnabled());
+        REQUIRE(!GetConfiguredEnumerationCommaSlashEnabled());
+        REQUIRE(ReadText(data_dir / L"config.toml").find("enumeration_comma_slash = false") != std::string::npos);
+
+        REQUIRE(SetConfiguredEnumerationCommaSlashEnabled(true));
+        REQUIRE(SetConfiguredEnumerationCommaBackslashEnabled(false));
+        REQUIRE(FormatEnumerationCommaWorkerPayload() == L"2");
+
+        // 手改成两个都关：按默认（两个都开）读。
+        WriteText(data_dir / L"config.toml",
+                  "[input]\nenumeration_comma_backslash = false\nenumeration_comma_slash = false\n");
+        InitImeConfig();
+        REQUIRE(GetConfiguredEnumerationCommaBackslashEnabled());
+        REQUIRE(GetConfiguredEnumerationCommaSlashEnabled());
+    }
+
+    fs::remove_all(unique_root, ec);
+
+    std::ifstream input(MSIME_DEFAULT_CONFIG_PATH, std::ios::binary);
+    REQUIRE(static_cast<bool>(input));
+    const std::string installed((std::istreambuf_iterator<char>(input)), {});
+    const auto parsed = toml::parse(installed);
+    REQUIRE(parsed["input"]["enumeration_comma_backslash"].value_or(false));
+    REQUIRE(parsed["input"]["enumeration_comma_slash"].value_or(false));
+}
+
 // 统计总开关：默认关闭（无文件 / 出厂模板 / 模板缺段三形态），能落盘并在重读后保持。
 // 出厂模板若不给 [statistics] 段，首次打开开关也必须成功——setter 不能假设段存在，
 // 否则设置页会报「保存失败」（先例：全拼纠错的 [quanpin] 段）。

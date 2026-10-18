@@ -22,11 +22,15 @@ namespace CandidateSkinCatalog
 struct Package;
 }
 
-// skinId is a built-in skin id; external skins pass their base skin and then
-// layer their [toolbar] overrides with ApplyFloatingToolbarSkinOverrides.
+// The toolbar of a base skin's look (CandidateSkinCatalog::ResolveBuiltInLook): its [toolbar]
+// colors and radii. External skins pass their base skin's look and then layer their own
+// [toolbar] overrides with ApplyFloatingToolbarSkinOverrides.
+FloatingToolbarSkin ResolveFloatingToolbarSkin(const CandidateSkinCatalog::Package &baseLook, bool light);
+
+// Same, from the factory look of skinId (no data directory involved).
 FloatingToolbarSkin ResolveFloatingToolbarSkin(const std::string &skinId, bool light);
 
-// Applies an external skin's [toolbar] colors and corner radius for the given
+// Applies an external skin's [toolbar] colors and corner radii for the given
 // theme. Unset or unparsable values keep what the base skin resolved.
 void ApplyFloatingToolbarSkinOverrides(FloatingToolbarSkin &skin, const CandidateSkinCatalog::Package &package,
                                        bool light);

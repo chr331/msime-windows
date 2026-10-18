@@ -137,11 +137,11 @@ Source: "{#MySourceRoot}\server_exe\*"; \
     DestDir: "{commonpf64}\metasequoiaime\server"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
-; 内置皮肤的设置清单归用户改，和 config.toml 一样只补缺失的文件、升级不覆盖。
+; 内置皮肤的出厂清单（开关与完整外观）每次安装都整份覆盖：用户技术上能改，但不建议，升级会冲掉改动。
 ; 单独暂存在 default_skins，不经 app_data：skins 整个目录是用户数据，卸载时不删。
 Source: "{#MySourceRoot}\default_skins\*"; \
     DestDir: "{code:GetDataDir}\skins\default"; \
-    Flags: onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
+    Flags: ignoreversion recursesubdirs createallsubdirs uninsneveruninstall
 
 ; 仓库 skins\ 下的外部皮肤，同名目录整目录覆盖。用户机器上的同名皮肤和随包的不一样时，
 ; PrepareToInstall 里的 BackupChangedBundledSkins 先把它改名成 <id>.bak 再复制。

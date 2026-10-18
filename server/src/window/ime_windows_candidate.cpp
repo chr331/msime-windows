@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <fmt/xchar.h>
 #include "utils/window_utils.h"
@@ -464,6 +465,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const bool previous_smart_punctuation_repeat_to_chinese =
                 GetConfiguredSmartPunctuationRepeatToChineseEnabled();
             const bool previous_paired_punctuation = GetConfiguredPairedPunctuationEnabled();
+            const std::wstring previous_enumeration_comma = FormatEnumerationCommaWorkerPayload();
             const std::string previous_punctuation_lock = GetConfiguredPunctuationLock();
             const bool previous_tsf_diagnostic_log = GetConfiguredTsfDiagnosticLogEnabled();
             const bool previous_statistics_enabled = GetConfiguredStatisticsEnabled();
@@ -475,6 +477,7 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const std::wstring previous_v_mode = FormatVModeWorkerPayload();
             const std::wstring previous_mid_sentence_helpcode_uppercase =
                 FormatMidSentenceHelpcodeUppercaseWorkerPayload();
+            const std::wstring previous_end_helpcode_triggers = FormatEndHelpcodeTriggersWorkerPayload();
             const std::wstring previous_paging_worker_payload = FormatPagingCommaPeriodWorkerPayload();
             const std::string previous_theme_mode = GetConfiguredThemeMode();
             const std::string previous_theme_cand = GetConfiguredThemeCand();
@@ -612,6 +615,12 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                         Global::DataFromServerMsgTypeToTsfWorkerThread::PairedPunctuationChanged,
                         GetConfiguredPairedPunctuationEnabled() ? L"1" : L"0");
                 }
+                if (previous_enumeration_comma != FormatEnumerationCommaWorkerPayload())
+                {
+                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                        Global::DataFromServerMsgTypeToTsfWorkerThread::EnumerationCommaKeysChanged,
+                        FormatEnumerationCommaWorkerPayload());
+                }
                 if (previous_punctuation_lock != GetConfiguredPunctuationLock())
                 {
                     BroadcastToTsfWorkerThreadViaNamedpipe(
@@ -673,6 +682,12 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                     BroadcastToTsfWorkerThreadViaNamedpipe(
                         Global::DataFromServerMsgTypeToTsfWorkerThread::MidSentenceHelpcodeUppercaseChanged,
                         FormatMidSentenceHelpcodeUppercaseWorkerPayload());
+                }
+                if (previous_end_helpcode_triggers != FormatEndHelpcodeTriggersWorkerPayload())
+                {
+                    BroadcastToTsfWorkerThreadViaNamedpipe(
+                        Global::DataFromServerMsgTypeToTsfWorkerThread::EndHelpcodeTriggersChanged,
+                        FormatEndHelpcodeTriggersWorkerPayload());
                 }
                 const VoiceInputConfig &voice_input = GetConfiguredVoiceInput();
                 if (previous_voice_input.enabled != voice_input.enabled ||
@@ -767,6 +782,19 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                                                     ? FanyNamedPipe::CandidateUiAction::PageDown
                                                     : FanyNamedPipe::CandidateUiAction::PageUp,
                                                 static_cast<int>(lParam));
+        break;
+
+    case WM_COMMIT_CANDIDATE_AT: {
+        std::unique_ptr<std::wstring> text(reinterpret_cast<std::wstring *>(lParam));
+        if (text)
+        {
+            FanyNamedPipe::EnqueueCandidateUiCommitAt(static_cast<int>(wParam), std::move(*text));
+        }
+        break;
+    }
+
+    case WM_EXPAND_CANDIDATES:
+        FanyNamedPipe::EnqueueCandidateUiExpand();
         break;
 
     case WM_CLEAR_IME_ENGINE_CACHE: {

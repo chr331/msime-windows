@@ -107,6 +107,12 @@ std::string MergeTomlIntoTemplate(const std::string &template_text, std::map<std
     {
         user_values[radical_mode_id] = unicode_mode->second;
     }
+    // 顿号自定义加 / 时，老配置里没有这个键：升级用户保持原来只有 \ 出顿号，/ 默认开只给新装用户。
+    const auto enumeration_comma_slash_id = MakeTomlAssignmentId("input", "enumeration_comma_slash");
+    if (!user_values.empty() && user_values.find(enumeration_comma_slash_id) == user_values.end())
+    {
+        user_values[enumeration_comma_slash_id] = "false";
+    }
     struct ValuePatch
     {
         size_t begin;

@@ -42,6 +42,11 @@ struct QueryRequest
     bool has_syllable_helpcode_layout = false;
     std::vector<std::size_t> syllable_helpcode_source_index;
     std::vector<std::pair<std::size_t, std::string>> syllable_helpcode_decorations;
+    // 双拼末尾辅助码（间接）：输入串末尾那一段引导键（或大写触发）后面敲的辅码，小写、按敲的顺序，一个
+    // 或两个。段本身连同辅码已从 raw_input 等去掉，原样留在 raw_input_with_syllable_helpcodes，显示挂在
+    // syllable_helpcode_decorations 里；查询时一码重排、两码筛选，与直接触发的末尾辅助码同一套规则。
+    // enable_shuangpin_helpcode 只管直接触发（按输入形状认辅码），与这一项无关。
+    std::string end_helpcodes;
     // 会话开着直接辅助码（不论这次请求有没有被改写）。词典层据此让词格与解析器共用一份跨度查询缓存。
     bool enable_direct_helpcode = false;
     // 直接辅助码在句中用什么结束四码：补 /（uiab/），或第二位辅码大写（uiaB），见 direct_helpcode/spelling_graph.h。

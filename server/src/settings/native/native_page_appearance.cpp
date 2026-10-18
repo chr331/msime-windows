@@ -492,15 +492,11 @@ VisualPtr BuildAppearancePage(PageContext &context)
             skinpreview::CandidateFont font = skinpreview::ReadCandidateFont(*model);
             font.size = static_cast<float>(model->GetInt("appearance.font_size", 16));
             const std::string skin = model->GetString("appearance.candidate_skin", "fluent");
-            skinpreview::CandidateLook look =
-                skinpreview::ResolveCandidateLook(*model, skin, light, horizontal, font.size);
-            look.pinyinFontSize = static_cast<float>(
-                model->GetInt("appearance.candidate_window_preedit_font_size", static_cast<int64_t>(font.size)));
-            const std::string color = model->GetString("appearance.cand_text_color", "auto");
-            D2D1_COLOR_F parsed{};
-            if (color != "auto" && ParseCssColor(color, parsed))
-                look.candText = parsed;
             skinpreview::CandidatePreview::Options options;
+            options.preeditFontSize = static_cast<float>(
+                model->GetInt("appearance.candidate_window_preedit_font_size", static_cast<int64_t>(font.size)));
+            options.textColor = model->GetString("appearance.cand_text_color", "auto");
+            options.fitContent = model->GetBool("appearance.candidate_window_fit_content", false);
             options.horizontal = horizontal;
             options.pageSize = static_cast<size_t>(model->GetInt("appearance.page_size", 6));
             options.preedit = model->GetString("appearance.candidate_window_preedit_style", "pinyin") != "empty";
@@ -513,24 +509,12 @@ VisualPtr BuildAppearancePage(PageContext &context)
                                    model->GetBool("helpcode.show_sp_helpcode_in_candidate_window", true);
             else
                 options.helpcode = false;
-            // skin.ts skinShowsPageArrows(): an external skin's own flag, else the
-            // built-in skin's manifest flag.
-            bool arrows = false;
-            if (const Json *external = skinpreview::FindExternalSkin(*model, skin))
-            {
-                if (external->contains("pageArrows") && (*external)["pageArrows"].is_boolean())
-                    arrows = (*external)["pageArrows"].get<bool>();
-            }
-            else if (const Json *builtin = model->Find("appearance.builtin_skin_page_arrows");
-                     builtin && builtin->is_object())
-            {
-                const std::string id = skinpreview::IsBuiltinSkin(skin) ? skin : std::string("fluent");
-                if (builtin->contains(id) && (*builtin)[id].is_boolean())
-                    arrows = (*builtin)[id].get<bool>();
-            }
-            options.pageArrows = arrows;
-            previewBox->SetDecorated(!look.decorationImage.empty());
-            control->Set(look, font, options);
+            // 翻页箭头与卷轴展开按钮由预览按皮肤清单自己决定，与候选窗同一套判定。
+            const Json *external = skinpreview::FindExternalSkin(*model, skin);
+            previewBox->SetDecorated(external && external->contains("decorationTopDip") &&
+                                     (*external)["decorationTopDip"].is_number() &&
+                                     (*external)["decorationTopDip"].get<double>() > 0.0);
+            control->Set(*model, skin, light, font, options);
         });
     }
 

@@ -55,6 +55,13 @@ class InputSession
     KeyResult set_candidate_position(std::size_t index, int position);
     void enable_fixed_positions();
     void set_shuangpin_helpcode_enabled(bool enabled);
+    // 双拼末尾辅助码的触发方式。direct（默认）按输入形状认辅码：完整音节后多一个键是单码，末尾两键带
+    // 大写是双码。关掉后改由引导键触发：宿主把触发键（反引号或分号）换成 kEndMarker 交进来，
+    // uppercase_trigger 开着时完整音节后的大写字母也开一段，见 FanyImeMidSentenceHelpcode::kEndMarker。
+    void set_shuangpin_helpcode_triggers(bool direct, bool uppercase_trigger);
+    // 宿主在把触发键换成 kEndMarker 之前问这一句：双拼辅助码开着、关着直接、没开直接辅助码，且光标在
+    // 输入串末尾、前面是一个个完整的双拼音节。
+    bool accepts_end_helpcode_marker_at(std::size_t caret) const;
     // 句中辅助码（双拼），见 core/syllable_helpcode.h。默认关闭。
     void set_mid_sentence_helpcode_enabled(bool enabled);
     // 宿主在决定是否把反引号当作编码键之前问这一句：开关开着、双拼，且光标前这一节能接一段句中
@@ -188,6 +195,7 @@ class InputSession
     void reset_sentence_cache();
 
     const std::vector<WordItem> &get_candidates() const;
+    bool can_expand_initial_candidates() const;
     bool expand_initial_candidates();
     std::optional<WordItem> find_candidate(const std::string &key, const std::string &value);
 
@@ -363,6 +371,8 @@ class InputSession
     unsigned quanpin_autocorrect_types_ = 0;
     bool quanpin_helpcode_enabled_ = true;
     bool shuangpin_helpcode_enabled_ = true;
+    bool shuangpin_helpcode_direct_ = true;
+    bool end_helpcode_uppercase_trigger_enabled_ = false;
     bool mid_sentence_helpcode_enabled_ = false;
     bool direct_helpcode_enabled_ = false;
     bool direct_helpcode_slash_marker_ = true;

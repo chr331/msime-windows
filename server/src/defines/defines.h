@@ -34,6 +34,13 @@ inline const UINT WM_MOVE_CARET_STATE = WM_USER + 123;
 // 候选框翻页箭头被点击。与 WM_PAGE_CANDIDATE 同参，但不受「鼠标滚轮翻页」开关约束。
 inline const UINT WM_PAGE_CANDIDATE_ARROW = WM_USER + 124;
 inline const UINT UPDATE_FTB_INPUT_MODE = WM_USER + 125;
+// 卷轴展开面板里点选了候选。wParam 是候选的绝对下标，lParam 是 new 出来的 std::wstring*（显示文字），
+// 由宿主窗口过程接管并释放。
+inline const UINT WM_COMMIT_CANDIDATE_AT = WM_USER + 126;
+// 卷轴展开面板打开或滚到底部，请求再展开一批候选。
+inline const UINT WM_EXPAND_CANDIDATES = WM_USER + 127;
+// 候选窗自己投递给自己：切换卷轴展开面板。放到消息队列里做，免得在鼠标分发途中改场景。
+inline const UINT WM_TOGGLE_CANDIDATE_EXPAND = WM_USER + 128;
 
 // wParam of WM_PAGE_CANDIDATE / WM_PAGE_CANDIDATE_ARROW; lParam carries how many pages to move.
 inline constexpr WPARAM CANDIDATE_PAGE_PREVIOUS = 0;

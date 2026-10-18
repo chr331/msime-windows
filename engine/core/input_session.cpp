@@ -168,6 +168,8 @@ KeyResult InputSession::handle_character(char character, bool shift_only)
         character == ';' && scheme() == SchemeType::Shuangpin && ShuangpinProfileUsesSemicolonFinal(shuangpin_profile_);
     const bool mid_sentence_marker = character == shuangpin::kMidSentenceHelpcodeMarker && has_composition() &&
                                      accepts_mid_sentence_helpcode_marker();
+    const bool end_helpcode_marker = character == shuangpin::kEndHelpcodeMarker && has_composition() &&
+                                     accepts_end_helpcode_marker_at(get_pinyin_sequence_with_cases().size());
     // 句中辅助码：反引号后的第一码大小写都收，紧跟的大写字母是第二码，与辅助码开关无关。
     const bool mid_sentence_code = accepts_mid_sentence_code_at(get_pinyin_sequence_with_cases().size(), character);
     // 直接辅助码：辅码可以用大写敲（万象的大写变体），四码后接 / 终止。
@@ -177,8 +179,8 @@ KeyResult InputSession::handle_character(char character, bool shift_only)
         character >= 'A' && character <= 'Z' && has_composition() &&
         ((scheme() == SchemeType::Quanpin && quanpin_helpcode_enabled_) ||
          (scheme() == SchemeType::Shuangpin && (shuangpin_helpcode_enabled_ || direct_helpcode_enabled_)));
-    if (!lowercase_letter && !active_helpcode && !mid_sentence_code && !mid_sentence_marker && character != '\'' &&
-        !semicolon_final && !direct_slash)
+    if (!lowercase_letter && !active_helpcode && !mid_sentence_code && !mid_sentence_marker && !end_helpcode_marker &&
+        character != '\'' && !semicolon_final && !direct_slash)
     {
         return {};
     }
@@ -192,6 +194,7 @@ KeyResult InputSession::handle_character(char character, bool shift_only)
     const ImeKeyCode key_code = character == '\''     ? ImeKey::Apostrophe
                                 : direct_slash        ? ImeKey::Slash
                                 : mid_sentence_marker ? ImeKey::Backquote
+                                : end_helpcode_marker ? ImeKey::Backquote
                                 : semicolon_final     ? ImeKey::Semicolon
                                                       : static_cast<ImeKeyCode>(std::toupper(unsigned_character));
     engine_.handle_key(key_code, 0, static_cast<ImeCharacter>(unsigned_character));
@@ -384,6 +387,32 @@ void InputSession::set_shuangpin_helpcode_enabled(bool enabled)
     online_requests_.invalidate();
 }
 
+void InputSession::set_shuangpin_helpcode_triggers(bool direct, bool uppercase_trigger)
+{
+    if (shuangpin_helpcode_direct_ == direct && end_helpcode_uppercase_trigger_enabled_ == uppercase_trigger)
+    {
+        return;
+    }
+    shuangpin_helpcode_direct_ = direct;
+    end_helpcode_uppercase_trigger_enabled_ = uppercase_trigger;
+    engine_.set_shuangpin_helpcode_triggers(direct, uppercase_trigger);
+    update_mixed_candidates();
+    online_requests_.invalidate();
+}
+
+bool InputSession::accepts_end_helpcode_marker_at(std::size_t caret) const
+{
+    // 直接辅助码接管辅码时末尾辅助码整个让位，引导键也就不收。
+    if (!shuangpin_helpcode_enabled_ || shuangpin_helpcode_direct_ || direct_helpcode_enabled_ || !is_shuangpin() ||
+        dedicated_english_mode_ || local_input_mode_ != LocalInputMode::None)
+    {
+        return false;
+    }
+    const std::string &typed = get_pinyin_sequence_with_cases();
+    return FanyImeMidSentenceHelpcode::AcceptsEndMarkerAt(typed.data(), typed.size(), caret,
+                                                          engine_.helpcode_uppercase_triggers());
+}
+
 void InputSession::set_mid_sentence_helpcode_enabled(bool enabled)
 {
     if (mid_sentence_helpcode_enabled_ == enabled)
@@ -446,7 +475,7 @@ bool InputSession::accepts_mid_sentence_helpcode_marker_at(std::size_t caret) co
         return false;
     }
     return shuangpin::accepts_mid_sentence_helpcode_marker_at(get_pinyin_sequence_with_cases(), caret,
-                                                              engine_.mid_sentence_uppercase_trigger_active());
+                                                              engine_.helpcode_uppercase_triggers());
 }
 
 void InputSession::set_mid_sentence_uppercase_trigger_enabled(bool enabled)
@@ -469,12 +498,12 @@ bool InputSession::accepts_mid_sentence_code_at(std::size_t caret, char characte
     {
         return false;
     }
-    const bool uppercase_trigger = engine_.mid_sentence_uppercase_trigger_active();
+    const auto triggers = engine_.helpcode_uppercase_triggers();
     const std::string before = typed.substr(0, caret);
     // 反引号后的第一码、只有第一码的段后的第二码，或（大写触发开着时）完整音节后自己开一段。
     return before.back() == shuangpin::kMidSentenceHelpcodeMarker ||
-           shuangpin::accepts_mid_sentence_second_code(before, character, uppercase_trigger) ||
-           (uppercase_trigger && FanyImeMidSentenceHelpcode::AcceptsMarkerAt(typed.data(), typed.size(), caret, true));
+           shuangpin::accepts_mid_sentence_second_code(before, character, triggers) ||
+           (triggers.mid && FanyImeMidSentenceHelpcode::AcceptsMarkerAt(typed.data(), typed.size(), caret, true));
 }
 
 bool InputSession::has_mid_sentence_helpcode() const

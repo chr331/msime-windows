@@ -158,6 +158,19 @@ std::vector<WordItem> ShuangpinEngine::query_unfiltered(const QueryRequest &requ
         return {};
     }
 
+    // 引导键触发的末尾辅助码：辅码由方案层从末尾段里取出，输入串里已经没有它们，不用再猜哪几个键是
+    // 辅码，也不会和「再打一个声母」混在一起，所以单码不补原拼音的候选。
+    if (!request.end_helpcodes.empty())
+    {
+        const std::string segmentation = shuangpin::segment_input(raw_input, profile_);
+        const auto base = query_normal(dictionary_, request, profile_);
+        auto filtered =
+            request.end_helpcodes.size() == 2
+                ? HelpcodeUtils::filter_candidates_with_double_helpcodes(base, request.end_helpcodes, helpcodes_.get())
+                : HelpcodeUtils::reorder_candidates_with_single_helpcode(base, request.end_helpcodes, helpcodes_.get());
+        return append_fuzzy(std::move(filtered), segmentation, request.fuzzy_pinyin, request.end_helpcodes);
+    }
+
     if (request.enable_shuangpin_helpcode)
     {
         // 双码辅助
@@ -185,17 +198,30 @@ std::vector<WordItem> ShuangpinEngine::query_unfiltered(const QueryRequest &requ
                         request.fuzzy_pinyin);
 }
 
-bool ShuangpinEngine::expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates)
+std::string ShuangpinEngine::expandable_initial_code(const QueryRequest &request) const
 {
     if (request.scheme != SchemeType::Shuangpin)
     {
-        return false;
+        return {};
     }
 
     const std::string segmentation = shuangpin::segment_input(request.raw_input, profile_);
     const size_t separator = segmentation.find('\'');
-    const std::string initial_code = segmentation.substr(0, separator);
-    if (initial_code.size() != 1)
+    std::string initial_code = segmentation.substr(0, separator);
+    return initial_code.size() == 1 ? initial_code : std::string{};
+}
+
+bool ShuangpinEngine::can_expand_initial_candidates(const QueryRequest &request,
+                                                    const std::vector<WordItem> &candidates) const
+{
+    const std::string initial_code = expandable_initial_code(request);
+    return !initial_code.empty() && ShuangpinDictionary::can_expand_initial_candidates(initial_code, candidates);
+}
+
+bool ShuangpinEngine::expand_initial_candidates(const QueryRequest &request, std::vector<WordItem> &candidates)
+{
+    const std::string initial_code = expandable_initial_code(request);
+    if (initial_code.empty())
     {
         return false;
     }

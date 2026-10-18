@@ -131,126 +131,6 @@ void TraceStartup(const char *stage)
     }
 }
 
-nlohmann::json CandidateColorsToJson(const CandidateSkinCatalog::CandidateColors &colors)
-{
-    nlohmann::json json = nlohmann::json::object();
-    if (!colors.accent.empty())
-        json["accent"] = colors.accent;
-    if (!colors.selected.empty())
-        json["selected"] = colors.selected;
-    if (!colors.hover.empty())
-        json["hover"] = colors.hover;
-    if (!colors.surface.empty())
-        json["surface"] = colors.surface;
-    if (!colors.border.empty())
-        json["border"] = colors.border;
-    if (!colors.text.empty())
-        json["text"] = colors.text;
-    if (!colors.number.empty())
-        json["number"] = colors.number;
-    if (!colors.translation.empty())
-        json["translation"] = colors.translation;
-    if (colors.showSelectedBar.has_value())
-        json["showSelectedBar"] = *colors.showSelectedBar;
-    const std::pair<const char *, const std::string *> optional[] = {
-        {"candidateText", &colors.candidateText},
-        {"preeditText", &colors.preeditText},
-        {"preeditCaret", &colors.preeditCaret},
-        {"selectedText", &colors.selectedText},
-        {"selectedNumber", &colors.selectedNumber},
-        {"selectedTranslation", &colors.selectedTranslation},
-        {"selectedBar", &colors.selectedBar},
-        {"preeditBackground", &colors.preeditBackground},
-        {"preeditDivider", &colors.preeditDivider},
-        {"translationPos", &colors.translationPos},
-        {"translationSeparator", &colors.translationSeparator},
-        {"selectedTranslationPos", &colors.selectedTranslationPos},
-        {"selectedTranslationSeparator", &colors.selectedTranslationSeparator},
-    };
-    for (const auto &[key, value] : optional)
-    {
-        if (!value->empty())
-            json[key] = *value;
-    }
-    nlohmann::json menu = nlohmann::json::object();
-    if (!colors.menuBackground.empty())
-        menu["background"] = colors.menuBackground;
-    if (!colors.menuBorder.empty())
-        menu["border"] = colors.menuBorder;
-    if (!colors.menuText.empty())
-        menu["text"] = colors.menuText;
-    if (!colors.menuHover.empty())
-        menu["hover"] = colors.menuHover;
-    if (!menu.empty())
-        json["menu"] = std::move(menu);
-    return json;
-}
-
-// canvas（v2）皮肤给设置页预览的面板几何与挂件，与候选窗同一套换算；四边按「上右下左」。不是 v2 时为 null。
-nlohmann::json CanvasSkinPreviewJson(const CandidateSkinCatalog::Package &skin)
-{
-    if (skin.schemaVersion < 2)
-        return nullptr;
-    const auto edges = [](const CandidateSkinLayers::Edges &e) {
-        return nlohmann::json::array({e.top, e.right, e.bottom, e.left});
-    };
-    // 5 DIP 是候选窗 canvas 基底自己的内边距（CandidatePresenter 的 containerPad）。
-    nlohmann::json json = {{"padding", edges(CandidateSkinLayers::ResolveContentPadding(skin, 5.0))},
-                           {"panel", nullptr},
-                           {"lineGap", skin.lineGapDip ? nlohmann::json(*skin.lineGapDip) : nlohmann::json()},
-                           {"outer", nullptr}};
-    if (skin.borderImage && !skin.borderImage->source.empty())
-    {
-        const CandidateSkinLayers::NineSlice nine = CandidateSkinLayers::ResolveNineSlice(*skin.borderImage);
-        json["panel"] = {{"image", skin.borderImage->source},
-                         {"lightImage", CandidateSkinCatalog::BorderImageSource(*skin.borderImage, true)},
-                         {"slice", edges(nine.slice)},
-                         {"width", edges(nine.width)},
-                         {"fill", nine.fill}};
-    }
-    if (skin.outerInsetsDip)
-    {
-        const CandidateSkinCatalog::InsetsDip &outer = *skin.outerInsetsDip;
-        json["outer"] = nlohmann::json::array({outer.top, outer.right, outer.bottom, outer.left});
-    }
-    // 挂件已按候选窗的规则排好序、分成面板下层与上层，预览按数组顺序绘制即可。
-    const auto decorations = [](const std::vector<CandidateSkinCatalog::FreeDecoration> &layer) {
-        nlohmann::json array = nlohmann::json::array();
-        for (const auto &dec : layer)
-        {
-            array.push_back({{"image", dec.image},
-                             {"anchor", dec.anchor},
-                             {"offsetX", dec.offsetXDip},
-                             {"offsetY", dec.offsetYDip},
-                             {"width", dec.widthDip},
-                             {"height", dec.heightDip}});
-        }
-        return array;
-    };
-    const CandidateSkinLayers::Layers layers = CandidateSkinLayers::SplitDecorations(skin.freeDecorations);
-    json["decorationsBelow"] = decorations(layers.below);
-    json["decorationsAbove"] = decorations(layers.above);
-    return json;
-}
-
-nlohmann::json ToolbarColorsToJson(const CandidateSkinCatalog::ToolbarColors &colors)
-{
-    nlohmann::json json = nlohmann::json::object();
-    if (!colors.background.empty())
-        json["background"] = colors.background;
-    if (!colors.border.empty())
-        json["border"] = colors.border;
-    if (!colors.handle.empty())
-        json["handle"] = colors.handle;
-    if (!colors.divider.empty())
-        json["divider"] = colors.divider;
-    if (!colors.icon.empty())
-        json["icon"] = colors.icon;
-    if (!colors.hover.empty())
-        json["hover"] = colors.hover;
-    return json;
-}
-
 void ShowAboutSection()
 {
     if (g_native)
@@ -399,6 +279,7 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
         for (const auto &skin : g_candidate_skin_catalog->packages)
         {
             external_skins.push_back(
+                // 设置页只用这些列出皮肤卡片；预览按皮肤清单自己画（CandidateSkinScene），不经这里。
                 {{"id", skin.id},
                  {"name", skin.name},
                  {"version", skin.version},
@@ -407,37 +288,10 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
                  {"base", skin.base},
                  {"layouts", skin.layouts},
                  {"themes", skin.themes},
-                 {"minWidthDip", skin.minWidthDip},
                  {"decorationTopDip", skin.decorationTopDip},
-                 {"decorationWidthDip", skin.decorationWidthDip},
-                 {"decorationImage", skin.decorationImage},
-                 {"decorationAlign", skin.decorationAlign},
-                 {"cornerRadiusDip", skin.cornerRadiusDip ? nlohmann::json(*skin.cornerRadiusDip) : nlohmann::json()},
-                 {"borderWidthDip", skin.borderWidthDip ? nlohmann::json(*skin.borderWidthDip) : nlohmann::json()},
-                 {"itemCornerRadiusDip",
-                  skin.itemCornerRadiusDip ? nlohmann::json(*skin.itemCornerRadiusDip) : nlohmann::json()},
-                 {"shadow", skin.shadow},
-                 {"fontFamily", skin.fontFamily},
-                 {"backgroundImage", skin.backgroundImage},
-                 {"backgroundFit", skin.backgroundFit},
-                 {"backgroundOpacity", skin.backgroundOpacity},
-                 {"candidate",
-                  {{"dark", CandidateColorsToJson(skin.dark)}, {"light", CandidateColorsToJson(skin.light)}}},
-                 {"toolbar",
-                  {{"dark", ToolbarColorsToJson(skin.toolbarDark)}, {"light", ToolbarColorsToJson(skin.toolbarLight)}}},
-                 {"toolbarCornerRadiusDip",
-                  skin.toolbarCornerRadiusDip ? nlohmann::json(*skin.toolbarCornerRadiusDip) : nlohmann::json()},
-                 // 已按 base 的默认皮肤清单解析好，页面预览直接用。
-                 {"pageArrows", CandidateSkinCatalog::ResolvePageArrows(skins_root, skin.id, &skin)},
-                 {"schemaVersion", skin.schemaVersion},
-                 {"canvas", CanvasSkinPreviewJson(skin)},
                  {"compatible", CandidateSkinCatalog::Supports(skin, skin_layout, skin_theme)}});
         }
     }
-    // 内置皮肤的翻页箭头开关每次都现读 skins/default，用户改完清单刷新设置页即可在预览里看到。
-    nlohmann::json builtin_page_arrows = nlohmann::json::object();
-    for (const auto &id : CandidateSkinCatalog::BuiltInIds())
-        builtin_page_arrows[id] = CandidateSkinCatalog::ResolvePageArrows(skins_root, id, nullptr);
     nlohmann::json skin_issues = nlohmann::json::array();
     if (g_candidate_skin_catalog)
     {
@@ -480,6 +334,8 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"smart_punctuation_direct_letter", GetConfiguredSmartPunctuationDirectLetterEnabled()},
             {"smart_punctuation_repeat_to_chinese", GetConfiguredSmartPunctuationRepeatToChineseEnabled()},
             {"paired_punctuation", GetConfiguredPairedPunctuationEnabled()},
+            {"enumeration_comma_backslash", GetConfiguredEnumerationCommaBackslashEnabled()},
+            {"enumeration_comma_slash", GetConfiguredEnumerationCommaSlashEnabled()},
             {"punctuation_lock", GetConfiguredPunctuationLock()},
             {"fuzzy_pinyin", GetConfiguredFuzzyPinyinEnabled()},
             {"fuzzy_z_zh", fuzzy_rules.enabled(metasequoia::FuzzyPinyinRule::Z_ZH)},
@@ -634,7 +490,6 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"candidate_window_preedit_font_size", GetConfiguredCandidateWindowPreeditFontSize()},
             {"cand_text_color", GetConfiguredCandidateTextColor()},
             {"system_fonts", GetSystemFontFamilies()},
-            {"builtin_skin_page_arrows", std::move(builtin_page_arrows)},
             {"external_candidate_skins", std::move(external_skins)},
             {"candidate_skin_scan_issues", std::move(skin_issues)},
             {"candidate_skin_catalog_scanned", g_candidate_skin_catalog.has_value()},
@@ -709,6 +564,10 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
           {"network", {{"proxy_mode", network_proxy.mode}, {"proxy_server", network_proxy.server}}},
           {"helpcode",
            {{"shuangpin_helpcode", GetConfiguredShuangpinHelpcodeEnabled()},
+            {"shuangpin_helpcode_direct", GetConfiguredShuangpinHelpcodeDirect()},
+            {"shuangpin_helpcode_trigger_backtick", GetConfiguredShuangpinHelpcodeTriggerBacktick()},
+            {"shuangpin_helpcode_trigger_semicolon", GetConfiguredShuangpinHelpcodeTriggerSemicolon()},
+            {"shuangpin_helpcode_trigger_uppercase", GetConfiguredShuangpinHelpcodeTriggerUppercase()},
             {"shuangpin_mid_sentence_helpcode", GetConfiguredShuangpinMidSentenceHelpcodeEnabled()},
             {"shuangpin_mid_sentence_helpcode_backtick", GetConfiguredShuangpinMidSentenceHelpcodeBacktick()},
             {"shuangpin_mid_sentence_helpcode_semicolon", GetConfiguredShuangpinMidSentenceHelpcodeSemicolon()},
@@ -820,6 +679,10 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredSmartPunctuationRepeatToChineseEnabled(json::value_to<bool>(data.at("value")));
     if (path == "input.paired_punctuation")
         return SetConfiguredPairedPunctuationEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "input.enumeration_comma_backslash")
+        return SetConfiguredEnumerationCommaBackslashEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "input.enumeration_comma_slash")
+        return SetConfiguredEnumerationCommaSlashEnabled(json::value_to<bool>(data.at("value")));
     if (path == "input.punctuation_lock")
         return SetConfiguredPunctuationLock(json::value_to<std::string>(data.at("value")));
     constexpr std::string_view input_section_prefix = "input.";
@@ -1101,6 +964,14 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredShowShuangpinHelpcodeInCandidateWindow(json::value_to<bool>(data.at("value")));
     if (path == "helpcode.shuangpin_helpcode")
         return SetConfiguredShuangpinHelpcodeEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "helpcode.shuangpin_helpcode_direct")
+        return SetConfiguredShuangpinHelpcodeDirect(json::value_to<bool>(data.at("value")));
+    if (path == "helpcode.shuangpin_helpcode_trigger_backtick")
+        return SetConfiguredShuangpinHelpcodeTriggerBacktick(json::value_to<bool>(data.at("value")));
+    if (path == "helpcode.shuangpin_helpcode_trigger_semicolon")
+        return SetConfiguredShuangpinHelpcodeTriggerSemicolon(json::value_to<bool>(data.at("value")));
+    if (path == "helpcode.shuangpin_helpcode_trigger_uppercase")
+        return SetConfiguredShuangpinHelpcodeTriggerUppercase(json::value_to<bool>(data.at("value")));
     if (path == "helpcode.shuangpin_mid_sentence_helpcode")
         return SetConfiguredShuangpinMidSentenceHelpcodeEnabled(json::value_to<bool>(data.at("value")));
     if (path == "helpcode.shuangpin_mid_sentence_helpcode_backtick")

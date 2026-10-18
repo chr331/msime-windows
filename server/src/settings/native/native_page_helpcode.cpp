@@ -249,38 +249,55 @@ std::shared_ptr<Dropdown> SchemeDropdown(PageContext &context, std::string path)
     return dropdown;
 }
 
-// A group of config checkboxes where the last checked one cannot be unchecked.
-std::vector<std::shared_ptr<CheckOption>> AtLeastOneChecks(
-    PageContext &context, const std::vector<std::pair<std::wstring, std::string>> &items)
+// The trigger keys of the shuangpin end helpcode (indirect) and the mid-sentence helpcode (indirect). Both
+// groups list the same keys in the same order, and a key belongs to one group at most: checking it on one
+// side unchecks it on the other, which the host does too (SetHelpcodeTrigger), even when that was the
+// other side's last key. A group's own last key cannot be unchecked.
+struct TriggerChecks
 {
-    auto checks = std::make_shared<std::vector<std::shared_ptr<CheckOption>>>();
+    std::vector<std::shared_ptr<CheckOption>> end;
+    std::vector<std::shared_ptr<CheckOption>> mid;
+};
+
+TriggerChecks ExclusiveTriggerChecks(PageContext &context,
+                                     const std::vector<std::pair<std::wstring, std::string>> &endItems,
+                                     const std::vector<std::pair<std::wstring, std::string>> &midItems)
+{
+    // The page and its controls live as long as the window, so the checks simply share the groups.
+    auto groups = std::make_shared<TriggerChecks>();
     SettingsModel *model = &context.model;
-    for (size_t i = 0; i < items.size(); ++i)
-    {
-        auto check = std::make_shared<CheckOption>(items[i].first, model->GetBool(items[i].second));
-        const std::string path = items[i].second;
-        // The group outlives none of its checks: the page and its controls live as long as
-        // the window, so the checks simply share it.
-        std::vector<std::shared_ptr<CheckOption>> *all = checks.get();
-        CheckOption *self = check.get();
-        check->SetOnChanged([checks, all, self, model, path](bool checked) {
-            const bool anyChecked =
-                std::any_of(all->begin(), all->end(), [](const auto &item) { return item->IsChecked(); });
-            if (!anyChecked)
-            {
-                self->SetChecked(true);
-                return;
-            }
-            model->Update(path, checked);
-        });
-        std::weak_ptr<CheckOption> weak = check;
-        context.OnConfig([weak, model, path]() {
-            if (auto control = weak.lock())
-                control->SetChecked(model->GetBool(path));
-        });
-        checks->push_back(check);
-    }
-    return *checks;
+    const auto build = [&](const std::vector<std::pair<std::wstring, std::string>> &items, bool end) {
+        auto &own = end ? groups->end : groups->mid;
+        for (size_t i = 0; i < items.size(); ++i)
+        {
+            auto check = std::make_shared<CheckOption>(items[i].first, model->GetBool(items[i].second));
+            const std::string path = items[i].second;
+            TriggerChecks *all = groups.get();
+            CheckOption *self = check.get();
+            check->SetOnChanged([groups, all, self, i, end, model, path](bool checked) {
+                const auto &mine = end ? all->end : all->mid;
+                const auto &theirs = end ? all->mid : all->end;
+                if (!checked &&
+                    std::none_of(mine.begin(), mine.end(), [](const auto &item) { return item->IsChecked(); }))
+                {
+                    self->SetChecked(true);
+                    return;
+                }
+                if (checked && i < theirs.size())
+                    theirs[i]->SetChecked(false);
+                model->Update(path, checked);
+            });
+            std::weak_ptr<CheckOption> weak = check;
+            context.OnConfig([weak, model, path]() {
+                if (auto control = weak.lock())
+                    control->SetChecked(model->GetBool(path));
+            });
+            own.push_back(check);
+        }
+    };
+    build(endItems, true);
+    build(midItems, false);
+    return *groups;
 }
 
 // `.content-page-option`: margin-top 8px, check options split by `.input-option-divider`,
@@ -339,7 +356,17 @@ VisualPtr BuildHelpcodePage(PageContext &context)
     PageBuilder page(L"辅助码");
     SettingsModel *model = &context.model;
 
-    // 双拼辅助码
+    // 双拼末尾辅助码与句中辅助码（间接）的触发键：一个键只能归一边，见 ExclusiveTriggerChecks。
+    const TriggerChecks triggers =
+        ExclusiveTriggerChecks(context,
+                               {{L"` 反引号", "helpcode.shuangpin_helpcode_trigger_backtick"},
+                                {L"; 分号", "helpcode.shuangpin_helpcode_trigger_semicolon"},
+                                {L"A 大写字母", "helpcode.shuangpin_helpcode_trigger_uppercase"}},
+                               {{L"` 反引号", "helpcode.shuangpin_mid_sentence_helpcode_backtick"},
+                                {L"; 分号", "helpcode.shuangpin_mid_sentence_helpcode_semicolon"},
+                                {L"A 大写字母", "helpcode.shuangpin_mid_sentence_helpcode_uppercase"}});
+
+    // 双拼辅助码（末尾）
     {
         auto column = std::make_shared<Column>(0.0f);
         column->Add(MakeRow(L"双拼辅助码", L"", BindToggle(context, "helpcode.shuangpin_helpcode")));
@@ -348,7 +375,25 @@ VisualPtr BuildHelpcodePage(PageContext &context)
         column->Add(Spaced(MakeRow(L"在候选窗口中显示双拼辅助码", L"",
                                    BindToggle(context, "helpcode.show_sp_helpcode_in_candidate_window"))));
 
-        // 句中辅助码 and 直接辅助码 exclude each other; the host turns the other off too.
+        column->Add(Spaced(MakeRow(L"直接辅助码", L"", BindToggle(context, "helpcode.shuangpin_helpcode_direct"))));
+        column->Add(CheckGroup({}, L"音节后直接接辅码：完整音节后多敲一个键是单码（如 ulpbx），末尾两键带大写是双码"
+                                   L"（如 ulpbxY）。关闭后改用下面的间接辅助码，不敲触发键时末尾的字母一律按拼音读"));
+        column->Add(Spaced(MakeRow(L"间接辅助码触发键", L"", nullptr)));
+        column->Add(CheckGroup(triggers.end,
+                               L"关闭直接辅助码后生效。在输入末尾敲触发键，再接一到两个辅码，大小写均可（如 "
+                               L"ulpb;xy），一码重排、两码筛选；大写字母触发时第一码敲成大写（如 ulpbXy）。"
+                               L"与句中辅助码的触发键互斥：勾选一边会取消另一边的同一个键，一个都不剩时引导键"
+                               L"不生效。开启句中直接辅助码时，末尾辅助码由它统一识别"));
+        page.AddSection(column);
+    }
+
+    // 句中辅助码：给句中某个音节加辅码，只对双拼生效。间接（引导键）和直接（万象式）两种方式互斥。
+    {
+        auto column = std::make_shared<Column>(0.0f);
+        column->Add(MakeTitleBlock(L"句中辅助码", L"给句中某个音节加辅码，整句带着锁住的字重新打分。仅双拼生效，"
+                                                  L"下面两种方式互斥：开启其中一个会自动关闭另一个"));
+
+        // 间接 and 直接 exclude each other; the host turns the other off too.
         auto direct = std::make_shared<std::weak_ptr<ToggleSwitch>>();
         auto mid = BindToggle(context, "helpcode.shuangpin_mid_sentence_helpcode", [direct](bool on) {
             if (auto other = direct->lock(); other && on)
@@ -361,20 +406,19 @@ VisualPtr BuildHelpcodePage(PageContext &context)
         });
         *direct = directToggle;
 
-        column->Add(Spaced(MakeRow(L"句中辅助码", L"", mid)));
-        column->Add(Spaced(MakeRow(L"句中辅助码触发键", L"", nullptr)));
-        column->Add(CheckGroup(
-            AtLeastOneChecks(context, {{L"` 反引号", "helpcode.shuangpin_mid_sentence_helpcode_backtick"},
-                                       {L"; 分号", "helpcode.shuangpin_mid_sentence_helpcode_semicolon"},
-                                       {L"A 大写字母", "helpcode.shuangpin_mid_sentence_helpcode_uppercase"}}),
-            L"至少保留一个。分号在微软、搜狗、紫光双拼里也是 ing "
-            L"韵母，只有在完整音节后才当触发键；按下后预编辑里同样显示为 "
-            L"`。大写字母：完整音节后直接敲大写的第一码，相当于反引号加这个字母（如 "
-            L"ulpbXihfa），第二码仍要大写；开启后这个位置的大写字母不再当末尾双码辅助"));
+        column->Add(Spaced(MakeRow(L"间接辅助码", L"", mid)));
+        column->Add(CheckGroup({}, L"在完整音节后敲触发键，后面的字母筛这个音节上的字（如 ulpb`xihfa），"
+                                   L"第一码大小写均可，第二码要用大写（如 ulpb`xYihfa）"));
+        column->Add(Spaced(MakeRow(L"间接辅助码触发键", L"", nullptr)));
+        column->Add(CheckGroup(triggers.mid,
+                               L"与双拼辅助码的间接触发键互斥，规则同上。分号在微软、搜狗、紫光双拼里也是 ing "
+                               L"韵母，只有在完整音节后才当触发键；按下后预编辑里同样显示为 "
+                               L"`。大写字母：完整音节后直接敲大写的第一码，相当于反引号加这个字母（如 "
+                               L"ulpbXihfa），第二码仍要大写；开启后这个位置的大写字母不再当末尾双码辅助"));
 
         column->Add(Spaced(MakeRow(L"直接辅助码", L"", directToggle)));
-        column->Add(CheckGroup({}, L"三码字优先，四码词优先，双辅码加斜杠聚拢强制出单字。与上面的句中辅助码互斥："
-                                   L"开启其中一个会自动关闭另一个。开启后末尾辅助码也不再生效，由它统一识别"));
+        column->Add(CheckGroup({}, L"万象式，不要引导键：三码字优先，四码词优先，双辅码加斜杠聚拢强制出单字。"
+                                   L"开启后双拼辅助码的直接、间接两种末尾辅助码都不再生效，由它统一识别"));
         column->Add(Spaced(MakeRow(L"直接辅助码句中四码标记", L"", nullptr)));
         column->Add(CheckGroup(
             AtLeastOneChecks(context, {{L"/ 斜杠（uiab/）", "helpcode.shuangpin_direct_helpcode_slash"},

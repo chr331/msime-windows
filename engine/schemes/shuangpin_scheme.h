@@ -26,11 +26,18 @@ class ShuangpinScheme : public IInputScheme
     {
         mid_sentence_uppercase_trigger_ = enabled;
     }
+    // 末尾辅助码（间接）的大写触发：完整音节后的大写字母开一段末尾段。由会话按「双拼辅助码开、关着直接、
+    // 勾了大写、句中辅助码没占着大写」设置。
+    void set_end_helpcode_uppercase_trigger(bool enabled)
+    {
+        end_helpcode_uppercase_trigger_ = enabled;
+    }
 
   private:
     const ShuangpinProfile profile_;
     bool direct_helpcode_ = false;
     bool mid_sentence_uppercase_trigger_ = false;
+    bool end_helpcode_uppercase_trigger_ = false;
     std::string raw_input_;
     std::vector<KeyStroke> key_strokes_;
 };

@@ -13,34 +13,15 @@ using skinpreview::Band;
 using skinpreview::FlushCard;
 using skinpreview::PillButton;
 
-const wchar_t *BuiltinName(const std::string &id)
+// 内置皮肤的名称与说明写在它的清单（skins/default/<id>/skin.toml）里。
+std::wstring BuiltinName(const SettingsModel &model, const std::string &id)
 {
-    if (id == "wechat")
-        return L"微信绿主题";
-    if (id == "graphite")
-        return L"石墨 Graphite";
-    if (id == "willow_green")
-        return L"杨柳青 Willow green";
-    if (id == "autumn_osmanthus")
-        return L"秋桂 Autumn osmanthus";
-    if (id == "microsoft")
-        return L"微软 Microsoft";
-    return L"Fluent 主题";
+    return Widen(CandidateSkinCatalog::ResolveBuiltInInfo(skinpreview::SkinsRoot(model), id).name);
 }
 
-const wchar_t *BuiltinDescription(const std::string &id)
+std::wstring BuiltinDescription(const SettingsModel &model, const std::string &id)
 {
-    if (id == "wechat")
-        return L"微信绿候选窗与悬浮工具栏";
-    if (id == "graphite")
-        return L"克制、平直的候选窗与悬浮工具栏";
-    if (id == "willow_green")
-        return L"柔和圆角与柳绿色整行高亮";
-    if (id == "autumn_osmanthus")
-        return L"灰蓝底色与桂花色圆角高亮";
-    if (id == "microsoft")
-        return L"仿 Windows 11 微软拼音：宽候选格、紫色选中条与实心翻页三角";
-    return L"当前默认主题";
+    return Widen(CandidateSkinCatalog::ResolveBuiltInInfo(skinpreview::SkinsRoot(model), id).description);
 }
 
 std::vector<std::string> StringList(const Json *value)
@@ -206,8 +187,8 @@ std::shared_ptr<SkinCard> SkinPage::MakeCard(const std::string &id, const Json *
     card->official = official;
 
     auto titles = std::make_shared<Column>(0.0f);
-    card->title =
-        std::make_shared<Label>(external ? Widen(JsonString(*external, "name")) : BuiltinName(id), SectionTitleStyle());
+    card->title = std::make_shared<Label>(external ? Widen(JsonString(*external, "name")) : BuiltinName(*model_, id),
+                                          SectionTitleStyle());
     titles->Add(card->title);
     bool compatible = true;
     if (external)
@@ -246,7 +227,7 @@ std::shared_ptr<SkinCard> SkinPage::MakeCard(const std::string &id, const Json *
     }
     else
     {
-        card->description = MakeDescription(BuiltinDescription(id));
+        card->description = MakeDescription(BuiltinDescription(*model_, id));
     }
     titles->Add(card->description);
 
@@ -310,7 +291,7 @@ void SkinPage::ApplyCard(SkinCard &card)
 {
     const bool light = PreviewLight(card);
     if (!card.external)
-        card.title->SetText(std::wstring(BuiltinName(card.id)) + (light ? L"(Light)" : L"(Dark)"));
+        card.title->SetText(BuiltinName(*model_, card.id) + (light ? L"(Light)" : L"(Dark)"));
     else if (card.official)
     {
         const Json *manifest = skinpreview::FindExternalSkin(*model_, card.id);
@@ -319,24 +300,13 @@ void SkinPage::ApplyCard(SkinCard &card)
     }
     card.previewSwitch->SetText(light ? L"预览深色" : L"预览浅色");
 
-    bool arrows = false;
-    if (const Json *external = skinpreview::FindExternalSkin(*model_, card.id))
-    {
-        const auto it = external->find("pageArrows");
-        arrows = it != external->end() && it->is_boolean() && it->get<bool>();
-    }
-    else
-    {
-        arrows = model_->GetBool("appearance.builtin_skin_page_arrows." + card.id, false);
-    }
-
+    // 预览直接用候选窗的场景按皮肤清单画：翻页箭头、卷轴展开按钮都跟皮肤自己的开关走。
     const skinpreview::CandidateFont font = skinpreview::ReadCandidateFont(*model_);
     skinpreview::CandidatePreview::Options options;
-    options.pageArrows = arrows;
     options.horizontal = true;
-    card.horizontal->Set(skinpreview::ResolveCandidateLook(*model_, card.id, light, true, font.size), font, options);
+    card.horizontal->Set(*model_, card.id, light, font, options);
     options.horizontal = false;
-    card.vertical->Set(skinpreview::ResolveCandidateLook(*model_, card.id, light, false, font.size), font, options);
+    card.vertical->Set(*model_, card.id, light, font, options);
     card.toolbar->Set(skinpreview::ResolveToolbarLook(*model_, card.id, light), {});
 }
 

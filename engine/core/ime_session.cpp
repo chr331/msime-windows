@@ -54,6 +54,7 @@ void ImeSession::configure_shuangpin_scheme(IInputScheme *scheme) const
     {
         shuangpin_scheme->set_direct_helpcode(enable_direct_helpcode_);
         shuangpin_scheme->set_mid_sentence_uppercase_trigger(mid_sentence_uppercase_trigger_active());
+        shuangpin_scheme->set_end_helpcode_uppercase_trigger(end_helpcode_uppercase_trigger_active());
     }
 }
 
@@ -148,6 +149,14 @@ void ImeSession::switch_scheme(SchemeType scheme_type)
 void ImeSession::set_shuangpin_helpcode_enabled(bool enabled)
 {
     enable_shuangpin_helpcode_ = enabled;
+    bind_shuangpin_scheme();
+}
+
+void ImeSession::set_shuangpin_helpcode_triggers(bool direct, bool uppercase_trigger)
+{
+    shuangpin_helpcode_direct_ = direct;
+    end_helpcode_uppercase_trigger_ = uppercase_trigger;
+    bind_shuangpin_scheme();
 }
 
 void ImeSession::set_quanpin_helpcode_enabled(bool enabled)
@@ -364,6 +373,11 @@ std::optional<WordItem> ImeSession::find_candidate(SchemeType scheme, const std:
     return provider_registry_.find_candidate(scheme, key, value);
 }
 
+bool ImeSession::can_expand_initial_candidates() const
+{
+    return provider_registry_.can_expand_initial_candidates(state_.request, state_.candidates);
+}
+
 bool ImeSession::expand_initial_candidates()
 {
     return provider_registry_.expand_initial_candidates(state_.request, state_.candidates);
@@ -371,13 +385,19 @@ bool ImeSession::expand_initial_candidates()
 
 void ImeSession::apply_request_options(QueryRequest &request) const
 {
-    request.enable_shuangpin_helpcode = enable_shuangpin_helpcode_;
+    // 末尾辅助码直接触发时按输入形状认辅码；改成引导键触发后，辅码只来自方案层解析出的末尾段。
+    request.enable_shuangpin_helpcode = enable_shuangpin_helpcode_ && shuangpin_helpcode_direct_;
+    if (!enable_shuangpin_helpcode_ || shuangpin_helpcode_direct_)
+    {
+        request.end_helpcodes.clear();
+    }
     request.enable_mid_sentence_helpcode = enable_mid_sentence_helpcode_;
     if (enable_direct_helpcode_ && request.scheme == SchemeType::Shuangpin)
     {
         // 直接辅助码接管辅码：末尾单码/双码那套判断会把辅码字母当成别的东西，关掉；约束由解析器
         // 改写请求时再打开。
         request.enable_shuangpin_helpcode = false;
+        request.end_helpcodes.clear();
         request.enable_mid_sentence_helpcode = false;
         request.enable_direct_helpcode = true;
         request.direct_helpcode_slash_marker = direct_helpcode_slash_marker_;

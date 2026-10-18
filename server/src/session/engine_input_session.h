@@ -29,6 +29,7 @@ class EngineInputSession : public IInputSession
     void reset_sentence_cache() override;
 
     const std::vector<WordItem> &get_candidates() const override;
+    bool can_expand_initial_candidates() const override;
     bool expand_initial_candidates() override;
     std::string get_helpcode_annotation(const std::string &word, bool uppercase_all) const override;
     std::optional<WordItem> find_candidate(const std::string &key, const std::string &value) override;
@@ -48,6 +49,7 @@ class EngineInputSession : public IInputSession
     bool wubi_four_code_is_complete() const override;
     bool has_active_helpcode() const override;
     bool accepts_mid_sentence_helpcode_marker(std::size_t caret) const override;
+    bool accepts_end_helpcode_marker(std::size_t caret) const override;
     bool accepts_direct_helpcode_slash(std::size_t caret) const override;
     bool has_mid_sentence_helpcode() const override;
     std::vector<WordItem> candidates_without_mid_sentence_helpcode() override;

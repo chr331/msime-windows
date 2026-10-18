@@ -70,6 +70,9 @@ void EngineInputSession::ApplyConfiguration()
         }
     }
     session_.set_shuangpin_helpcode_enabled(GetConfiguredShuangpinHelpcodeEnabled());
+    // 大写触发给生效值：句中辅助码占着大写时末尾辅助码不收，与发给 TSF 的 EndHelpcodeTriggersChanged 一致。
+    session_.set_shuangpin_helpcode_triggers(GetConfiguredShuangpinHelpcodeDirect(),
+                                             IsConfiguredEndHelpcodeUppercaseTrigger());
     session_.set_mid_sentence_helpcode_enabled(GetConfiguredShuangpinMidSentenceHelpcodeEnabled());
     session_.set_direct_helpcode_enabled(GetConfiguredShuangpinDirectHelpcodeEnabled());
     session_.set_direct_helpcode_markers(GetConfiguredShuangpinDirectHelpcodeSlash(),
@@ -161,6 +164,11 @@ const std::vector<IInputSession::WordItem> &EngineInputSession::get_candidates()
     return session_.get_candidates();
 }
 
+bool EngineInputSession::can_expand_initial_candidates() const
+{
+    return session_.can_expand_initial_candidates();
+}
+
 bool EngineInputSession::expand_initial_candidates()
 {
     return session_.expand_initial_candidates();
@@ -242,6 +250,13 @@ bool EngineInputSession::accepts_mid_sentence_helpcode_marker(std::size_t caret)
     // 所以直接按当前配置判断，不等下一次重读。
     return GetConfiguredShuangpinMidSentenceHelpcodeEnabled() && !GetConfiguredShuangpinDirectHelpcodeEnabled() &&
            session_.accepts_mid_sentence_helpcode_marker_at(caret);
+}
+
+bool EngineInputSession::accepts_end_helpcode_marker(std::size_t caret) const
+{
+    // 同上，按当前配置判断。
+    return GetConfiguredShuangpinHelpcodeEnabled() && !GetConfiguredShuangpinHelpcodeDirect() &&
+           !GetConfiguredShuangpinDirectHelpcodeEnabled() && session_.accepts_end_helpcode_marker_at(caret);
 }
 
 bool EngineInputSession::accepts_direct_helpcode_slash(std::size_t caret) const

@@ -89,53 +89,27 @@ CandidateSkinPalette ResolveCandidateSkinPalette(const std::string &skinId, bool
                                                  const CandidateSkinCatalog::CandidateColors *packageColors,
                                                  const std::string &baseSkinId)
 {
-    const std::string &paletteSkinId = baseSkinId.empty() ? skinId : baseSkinId;
+    return ResolveCandidateSkinPalette(CandidateSkinCatalog::FactoryLook(baseSkinId.empty() ? skinId : baseSkinId),
+                                       light, configuredTextColor, packageColors);
+}
+
+CandidateSkinPalette ResolveCandidateSkinPalette(const CandidateSkinCatalog::Package &baseLook, bool light,
+                                                 const std::string &configuredTextColor,
+                                                 const CandidateSkinCatalog::CandidateColors *packageColors)
+{
+    // 底色、描边与文字取自基底清单；清单没写时（不该发生）退回不透明的深 / 浅中性色，免得画成透明。
     CandidateSkinPalette palette{
         CandidateColorFromRgb(light ? 0xFFFFFF : 0x202020),
-        light ? D2D1::ColorF(0, 0.12f) : ParseCandidateCssColor("#9b9b9b2e", CandidateColorFromRgb(0x3A3A3A, 0.18f)),
+        light ? D2D1::ColorF(0, 0.12f) : CandidateColorFromRgb(0x9B9B9B, 0x2E / 255.0f),
         CandidateColorFromRgb(light ? 0x1A1A1A : 0xE9E8E8),
     };
-    if (paletteSkinId == "wechat")
-    {
-        palette = light ? CandidateSkinPalette{CandidateColorFromRgb(0xF7F7F7), CandidateColorFromRgb(0xDEDEDE),
-                                               CandidateColorFromRgb(0x333333)}
-                        : CandidateSkinPalette{CandidateColorFromRgb(0x151515), CandidateColorFromRgb(0x292929),
-                                               CandidateColorFromRgb(0xB7B7B7)};
-    }
-    else if (paletteSkinId == "willow_green")
-    {
-        palette.surface = CandidateColorFromRgb(light ? 0xF4F5F3 : 0x2D2F2E);
-        palette.border = D2D1::ColorF(0, 0.0f);
-        palette.text = CandidateColorFromRgb(light ? 0x343936 : 0xD8DBD8);
-    }
-    else if (paletteSkinId == "autumn_osmanthus")
-    {
-        palette.surface = CandidateColorFromRgb(light ? 0xD6ECF0 : 0x7D929F);
-        palette.border = D2D1::ColorF(0, 0.0f);
-        palette.text = CandidateColorFromRgb(light ? 0x1F3138 : 0xF5F8FA);
-    }
-    else if (paletteSkinId == "graphite")
-    {
-        palette = light ? CandidateSkinPalette{CandidateColorFromRgb(0xFBFBFC), CandidateColorFromRgb(0xE2E5E9),
-                                               CandidateColorFromRgb(0x586476)}
-                        : CandidateSkinPalette{CandidateColorFromRgb(0x1C1F23), CandidateColorFromRgb(0x30353B),
-                                               CandidateColorFromRgb(0xAEB6C2)};
-    }
-    else if (paletteSkinId == "microsoft")
-    {
-        palette = light ? CandidateSkinPalette{CandidateColorFromRgb(0xF9F9F9), D2D1::ColorF(0, 0.1f),
-                                               CandidateColorFromRgb(0x1A1A1A)}
-                        : CandidateSkinPalette{CandidateColorFromRgb(0x2C2C2C), CandidateColorFromRgb(0x1C1C1C),
-                                               CandidateColorFromRgb(0xFFFFFF)};
-    }
-    else if (CandidateSkinCatalog::IsCanvasBase(paletteSkinId))
-    {
-        // 全贴图基底：面板与描边透明，外观交给九宫格贴图。透明色仍带上 fluent 的底色 RGB，
-        // GDI 那类不能透明的使用方压平时得到的是可读的底色而不是黑色。文字取高对比的近白 / 近黑。
-        palette.surface = CandidateColorFromRgb(light ? 0xFFFFFF : 0x202020, 0.0f);
-        palette.border = D2D1::ColorF(0, 0.0f);
-        palette.text = CandidateColorFromRgb(light ? 0x1A1A1A : 0xF2F2F2);
-    }
+    const CandidateSkinCatalog::CandidateColors &baseColors = light ? baseLook.light : baseLook.dark;
+    if (!baseColors.surface.empty())
+        palette.surface = ParseCandidateCssColor(baseColors.surface, palette.surface);
+    if (!baseColors.border.empty())
+        palette.border = ParseCandidateCssColor(baseColors.border, palette.border);
+    if (!baseColors.text.empty())
+        palette.text = ParseCandidateCssColor(baseColors.text, palette.text);
     if (packageColors)
     {
         if (!packageColors->surface.empty())
@@ -160,13 +134,7 @@ CandidateSkinPalette ResolveCandidateSkinPalette(const std::string &skinId, bool
 
 float CandidateSkinBaseItemRadiusDip(const std::string &baseSkinId)
 {
-    if (baseSkinId == "willow_green")
-        return 0.0f;
-    if (baseSkinId == "graphite")
-        return 2.0f;
-    if (baseSkinId == "autumn_osmanthus")
-        return 6.0f;
-    return 4.0f;
+    return static_cast<float>(CandidateSkinCatalog::FactoryLook(baseSkinId).itemCornerRadiusDip.value_or(4.0));
 }
 
 CandidateSkinPalette FlattenCandidateSkinPaletteForGdi(const CandidateSkinPalette &palette,

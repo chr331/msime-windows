@@ -1535,13 +1535,16 @@ HRESULT CMetasequoiaIME::_HandleCompositionPunctuation(TfEditCookie ec, _In_ ITf
                 const std::wstring candidate(receivedData->candidate_string);
                 const WCHAR preceding =
                     candidate.empty() ? _GetPrecedingCharForSmartPunctuation(ec, pContext) : candidate.back();
-                if (code == VK_DECIMAL || wch == L'/' || wch == L'-' || wch == L'+')
+                if (code == VK_DECIMAL || code == VK_DIVIDE || wch == L'-' || wch == L'+')
                 {
                     punctuationStr = candidate + (code == VK_DECIMAL ? L'.' : wch);
                 }
                 else
                 {
-                    punctuationStr = candidate + _ResolveSmartPunctuation(wch, preceding);
+                    // A key that is not Chinese punctuation (e.g. '/' or '\' not configured for 、)
+                    // still commits itself after the candidate.
+                    const std::wstring resolved = _ResolveSmartPunctuation(wch, preceding);
+                    punctuationStr = candidate + (resolved.empty() ? std::wstring(1, wch) : resolved);
                 }
             }
         }

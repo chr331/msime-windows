@@ -621,7 +621,8 @@ BOOL CMetasequoiaIME::_IsKeyEaten(         //
     //
     // Punctuation
     //
-    if (pCompositionProcessorEngine->IsPunctuation(wch))
+    // Numpad '/' stays the application's '/' even while main-keyboard '/' produces 、.
+    if (*pCodeOut != VK_DIVIDE && pCompositionProcessorEngine->IsPunctuation(wch))
     {
         const CANDIDATE_MODE candidateMode = freshCompositionState ? CANDIDATE_NONE : _candidateMode;
         if ((candidateMode == CANDIDATE_NONE || candidateMode == CANDIDATE_INCREMENTAL) && isPunctuation)

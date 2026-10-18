@@ -48,20 +48,18 @@ void RefreshPalette()
 
     // 外部皮肤在当前布局/主题下不生效时不套用，与两个候选窗后端同一条判定；
     // 布局因此要进缓存键，切换布局后徽标才会跟着回退。
+    const std::filesystem::path skinsRoot = std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins";
     std::optional<CandidateSkinCatalog::Package> package;
     if (!CandidateSkinCatalog::IsBuiltIn(skinId))
-        package =
-            CandidateSkinCatalog::LoadSupported(std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins",
-                                                skinId, layout, light ? "light" : "dark");
+        package = CandidateSkinCatalog::LoadSupported(skinsRoot, skinId, layout, light ? "light" : "dark");
     const CandidateSkinCatalog::CandidateColors *packageColors =
         package ? &(light ? package->light : package->dark) : nullptr;
-    const std::string baseSkinId = package ? package->base : std::string{};
-    const CandidateSkinPalette resolved =
-        ResolveCandidateSkinPalette(skinId, light, textColor, packageColors, baseSkinId);
+    const CandidateSkinCatalog::Package baseLook =
+        CandidateSkinCatalog::ResolveBuiltInLook(skinsRoot, package ? package->base : skinId);
+    const CandidateSkinPalette resolved = ResolveCandidateSkinPalette(baseLook, light, textColor, packageColors);
     // GDI cannot blend with what is behind the window, so a translucent skin
     // surface is flattened onto its opaque built-in base.
-    const CandidateSkinPalette opaqueBase =
-        ResolveCandidateSkinPalette(baseSkinId.empty() ? skinId : baseSkinId, light, textColor);
+    const CandidateSkinPalette opaqueBase = ResolveCandidateSkinPalette(baseLook, light, textColor);
     g_paletteCache = {skinId, textColor, light,
                       layout, revision,  FlattenCandidateSkinPaletteForGdi(resolved, opaqueBase.surface),
                       true};

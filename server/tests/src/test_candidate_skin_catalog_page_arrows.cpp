@@ -145,6 +145,45 @@ TEST_CASE(candidate_skin_fit_content_resolves_like_page_arrows)
     Cleanup(root);
 }
 
+// expand_panel resolves like page_arrows; expand_rows is a package-only integer in [2, 8].
+TEST_CASE(candidate_skin_expand_panel_resolves_like_page_arrows)
+{
+    const auto root = MakeSkinsRoot(L"expand-panel");
+    REQUIRE(!CandidateSkinCatalog::kDefaultExpandPanel);
+    REQUIRE(!CandidateSkinCatalog::ResolveExpandPanel(root, "wechat", nullptr));
+
+    WriteDefaultSkin(root, "wechat", "[candidate_window]\nexpand_panel = true\n");
+    REQUIRE(CandidateSkinCatalog::ResolveExpandPanel(root, "wechat", nullptr));
+    REQUIRE(!CandidateSkinCatalog::ResolveExpandPanel(root, "fluent", nullptr));
+    REQUIRE(!CandidateSkinCatalog::ResolvePageArrows(root, "wechat", nullptr));
+
+    WriteExternalSkin(root, "inherit", "wechat", "");
+    WriteExternalSkin(root, "override", "wechat", "expand_panel = false\n");
+    WriteExternalSkin(root, "rows", "fluent", "expand_panel = true\nexpand_rows = 6\n");
+    const auto inherit = CandidateSkinCatalog::Load(root, "inherit");
+    REQUIRE(inherit.has_value());
+    REQUIRE(!inherit->expandPanel.has_value());
+    REQUIRE(!inherit->expandRows.has_value());
+    REQUIRE(CandidateSkinCatalog::ResolveExpandPanel(root, "inherit", &*inherit));
+    const auto explicitOff = CandidateSkinCatalog::Load(root, "override");
+    REQUIRE(explicitOff.has_value());
+    REQUIRE(!CandidateSkinCatalog::ResolveExpandPanel(root, "override", &*explicitOff));
+    const auto rows = CandidateSkinCatalog::Load(root, "rows");
+    REQUIRE(rows.has_value());
+    REQUIRE(CandidateSkinCatalog::ResolveExpandPanel(root, "rows", &*rows));
+    REQUIRE(rows->expandRows.has_value() && *rows->expandRows == 6);
+
+    for (const char *bad :
+         {"expand_panel = \"yes\"\n", "expand_rows = 1\n", "expand_rows = 9\n", "expand_rows = 4.5\n"})
+    {
+        WriteExternalSkin(root, "bad", "fluent", bad);
+        std::string error;
+        REQUIRE(!CandidateSkinCatalog::Load(root, "bad", &error).has_value());
+        REQUIRE(!error.empty());
+    }
+    Cleanup(root);
+}
+
 // skins/default holds the built-in skins' settings, not a skin package: the scan must not list it as a broken
 // external skin, and it cannot be selected as one either.
 TEST_CASE(candidate_skin_scan_skips_default_settings_folder)

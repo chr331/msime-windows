@@ -16,6 +16,8 @@
 #include "utils/window_utils.h"
 #include "window/small_windows.h"
 #include "window/candidate_skin_palette.h"
+#include "window/candidate_skin_scene.h"
+#include "window/candidate_skin_tokens.h"
 #include "window/candidate_wheel_paging.h"
 #include "window/ime_windows.h"
 
@@ -42,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -88,160 +91,6 @@ HalfScreenDipLimits ApplyScaleToHalfScreenLimits(POINT pt, FLOAT scale)
     return limits;
 }
 
-struct CandSkinTokens
-{
-    D2D1_COLOR_F surface{};
-    D2D1_COLOR_F border{};
-    D2D1_COLOR_F text{};
-    D2D1_COLOR_F number = ParseCssColor("#e9e8e89d", ColorFromRgb(0xE9E8E8, 0.616f));
-    D2D1_COLOR_F selected = ParseCssColor("#3e3e3eb9", ColorFromRgb(0x3E3E3E, 0.725f));
-    D2D1_COLOR_F hover = ColorFromRgb(0x414141);
-    D2D1_COLOR_F accent = ColorFromRgb(0x6B69D6);
-    // Alpha 0: follow the candidate text at the CSS opacity .62 (see CandidateList::Appearance).
-    D2D1_COLOR_F translation = D2D1::ColorF(0, 0.0f);
-    float radius = 6.0f;
-    float borderWidth = 1.5f;
-    float containerPad = 5.0f;
-    bool showSelectedBar = true;
-    // Row corner radius, selected-row text colors and context-menu palette.
-    // Defaults are fluent dark; the fluent light branch and per-skin branches
-    // override. rowTextSelected/rowLabelSelected alpha 0 keeps the normal
-    // colors (bar-style selection, like the fluent CSS).
-    float itemRadius = 4.0f;
-    // > 0: rows touching the card's corners take this radius there instead.
-    float outerItemRadius = 0.0f;
-    // Row box geometry. Defaults suit the inset-highlight skins; full-bleed
-    // skins (willow green) pad the rows themselves because the card does not.
-    float itemGap = 2.0f;
-    float itemExtraHeight = 2.0f;
-    float itemPadLeft = 0.0f;
-    float itemPadRight = 0.0f;
-    // 横排时把卡片多出的宽度均分给同一行各项，铺满高亮的皮肤（杨柳青）末项才能贴到卡片右边。
-    bool justifyRows = false;
-    // 序号字号相对候选字号的比例、序号与候选之间的空、横排每项的最小宽度（0 为不限）。
-    float labelScale = 0.8f;
-    float labelGap = 1.5f;
-    float minItemWidth = 0.0f;
-    // 选中条的尺寸；selectedBarInside 让它落在高亮左缘之内，而不是骑在左缘上。
-    float selectedBarWidth = 3.0f;
-    float selectedBarHeightEm = 0.85f;
-    bool selectedBarInside = false;
-    // 翻页箭头画成候选文字色的实心三角（微软拼音那样），横排时前面再加一条分隔线。
-    bool trianglePager = false;
-    // 预编辑行隐藏时抵掉它与列表之间的 2px 行距，让卡片上下内边距一致。贴角皮肤总是这样做。
-    bool trimHiddenPreeditGap = false;
-    D2D1_COLOR_F pagerDivider = D2D1::ColorF(0, 0.0f);
-    msimeui::Thickness preeditMargin{};
-    D2D1_COLOR_F rowTextSelected = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F rowLabelSelected = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F menuFill = D2D1::ColorF(0x2D2D2D);
-    D2D1_COLOR_F menuBorder = ParseCssColor("#9b9b9b2e", D2D1::ColorF(0x3A3A3A, 0.18f));
-    D2D1_COLOR_F menuText = D2D1::ColorF(0xE9E8E8);
-    D2D1_COLOR_F menuHover = ColorFromRgb(0x414141);
-    // 外部皮肤的细分配色。alpha 0 表示没写：光标与选中条跟 accent，选中行翻译跟 translation，
-    // 预编辑背景与分隔线不画。
-    D2D1_COLOR_F preeditCaret = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F selectedBar = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F rowTranslationSelected = D2D1::ColorF(0, 0.0f);
-    // 翻译里的词性与分隔符。alpha 0 表示与本行翻译同色。
-    D2D1_COLOR_F translationPos = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F translationSeparator = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F rowTranslationPosSelected = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F rowTranslationSeparatorSelected = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F preeditBackground = D2D1::ColorF(0, 0.0f);
-    D2D1_COLOR_F preeditDivider = D2D1::ColorF(0, 0.0f);
-};
-
-// 内置皮肤翻译里词性与分隔符的不透明度，对应 CSS 里 8 位十六进制颜色的 99 与 73。
-constexpr float kTranslationPosAlpha = 0x80 / 255.0f;
-constexpr float kTranslationSeparatorAlpha = 0x73 / 255.0f;
-
-// 内置皮肤的翻译配色取自 Notion 调色板（https://docs.super.so/notion-colors）。词性用相邻的另一个色相再调淡，
-// 和英文单词区分开；分隔符是单词色降不透明度。
-void SetTranslationColors(CandSkinTokens &tokens, UINT rgb, UINT posRgb)
-{
-    tokens.translation = ColorFromRgb(rgb);
-    tokens.translationPos = ColorFromRgb(posRgb, kTranslationPosAlpha);
-    tokens.translationSeparator = ColorFromRgb(rgb, kTranslationSeparatorAlpha);
-}
-
-// 选中行铺了实色高亮的皮肤，翻译在选中行另换一组颜色，避免彩色字压在高亮色上。
-// 词性的不透明度单独给：实色高亮上按普通行的比例调淡会糊进底色。
-void SetSelectedTranslationColors(CandSkinTokens &tokens, UINT rgb, float alpha, UINT posRgb, float posAlpha)
-{
-    tokens.rowTranslationSelected = ColorFromRgb(rgb, alpha);
-    tokens.rowTranslationPosSelected = ColorFromRgb(posRgb, posAlpha);
-    tokens.rowTranslationSeparatorSelected = ColorFromRgb(rgb, alpha * kTranslationSeparatorAlpha);
-}
-
-// 皮肤阴影档位只缩放两层阴影的不透明度，几何不变；none 由调用方直接关掉阴影。
-float ShadowAlphaScale(const std::string &shadow)
-{
-    if (shadow == "soft")
-        return 0.5f;
-    if (shadow == "strong")
-        return 1.6f;
-    return 1.0f;
-}
-
-void ApplyPackageColors(const CandidateSkinCatalog::CandidateColors &colors, CandSkinTokens &tokens)
-{
-    const auto apply = [](const std::string &value, D2D1_COLOR_F &out) {
-        if (!value.empty())
-            out = ParseCssColor(value, out);
-    };
-    apply(colors.preeditCaret, tokens.preeditCaret);
-    apply(colors.selectedBar, tokens.selectedBar);
-    apply(colors.selectedText, tokens.rowTextSelected);
-    apply(colors.selectedNumber, tokens.rowLabelSelected);
-    // 包换了翻译色就不再用基础皮肤的词性/分隔符配色：普通行回到与翻译同色，选中行跟随 selected_translation。
-    if (!colors.translation.empty())
-    {
-        tokens.translationPos = D2D1::ColorF(0, 0.0f);
-        tokens.translationSeparator = D2D1::ColorF(0, 0.0f);
-    }
-    if (!colors.selectedTranslation.empty())
-    {
-        apply(colors.selectedTranslation, tokens.rowTranslationSelected);
-        tokens.rowTranslationPosSelected = tokens.rowTranslationSelected;
-        tokens.rowTranslationSeparatorSelected = tokens.rowTranslationSelected;
-    }
-    apply(colors.translationPos, tokens.translationPos);
-    apply(colors.translationSeparator, tokens.translationSeparator);
-    apply(colors.selectedTranslationPos, tokens.rowTranslationPosSelected);
-    apply(colors.selectedTranslationSeparator, tokens.rowTranslationSeparatorSelected);
-    apply(colors.preeditBackground, tokens.preeditBackground);
-    apply(colors.preeditDivider, tokens.preeditDivider);
-    apply(colors.menuBackground, tokens.menuFill);
-    apply(colors.menuBorder, tokens.menuBorder);
-    apply(colors.menuText, tokens.menuText);
-    apply(colors.menuHover, tokens.menuHover);
-    if (!colors.accent.empty())
-    {
-        tokens.accent = ParseCssColor(colors.accent, tokens.accent);
-    }
-    if (!colors.selected.empty())
-    {
-        tokens.selected = ParseCssColor(colors.selected, tokens.selected);
-    }
-    if (!colors.hover.empty())
-    {
-        tokens.hover = ParseCssColor(colors.hover, tokens.hover);
-    }
-    if (!colors.number.empty())
-    {
-        tokens.number = ParseCssColor(colors.number, tokens.number);
-    }
-    if (!colors.translation.empty())
-    {
-        tokens.translation = ParseCssColor(colors.translation, tokens.translation);
-    }
-    if (colors.showSelectedBar.has_value())
-    {
-        tokens.showSelectedBar = *colors.showSelectedBar;
-    }
-}
-
 std::wstring AssetRoot()
 {
     return CommonUtils::get_ime_data_path_w();
@@ -251,27 +100,6 @@ constexpr float kShadowPadLeft = 32.0f;
 constexpr float kShadowPadTop = 20.0f;
 constexpr float kShadowPadRight = 32.0f;
 constexpr float kShadowPadBottom = 40.0f;
-constexpr float kCandidateMinWidthDip = 160.0f;
-// body（预编辑行、候选列表、竖排翻页行）各行之间的固定行距。
-constexpr float kBodyRowSpacingDip = 2.0f;
-
-msimeui::ImageStretch BackgroundStretch(const std::string &fit)
-{
-    if (fit == "contain")
-        return msimeui::ImageStretch::Uniform;
-    if (fit == "stretch")
-        return msimeui::ImageStretch::Fill;
-    return msimeui::ImageStretch::UniformToFill;
-}
-
-msimeui::HorizontalAlignment DecorationAlignment(const std::string &align)
-{
-    if (align == "left")
-        return msimeui::HorizontalAlignment::Leading;
-    if (align == "center")
-        return msimeui::HorizontalAlignment::Center;
-    return msimeui::HorizontalAlignment::Trailing;
-}
 // Below this fraction of the kept extent, the page really got smaller (fewer or
 // shorter candidates) and the card follows it; above it, the difference is a
 // late addition coming or going and the card keeps its size.
@@ -280,55 +108,6 @@ constexpr float kStickyCardShrinkRatio = 0.7f;
 float StickyCardExtent(float kept, float natural)
 {
     return natural >= kept || natural < kept * kStickyCardShrinkRatio ? natural : kept;
-}
-
-// 横排且皮肤开了翻页箭头时的候选行：列表占去箭头以外的全部宽度，箭头贴在最右侧，
-// 相当于在候选右边多出一列窄列；箭头的竖直位置由它自己的外边距对齐到最后一行。
-class CandidateRowWithPager : public msimeui::Panel
-{
-  public:
-    CandidateRowWithPager(std::shared_ptr<msimeui::Visual> list, std::shared_ptr<msimeui::Visual> pager)
-        : list_(list.get()), pager_(pager.get())
-    {
-        AddChild(std::move(list));
-        AddChild(std::move(pager));
-    }
-
-    msimeui::SizeF Measure(const msimeui::SizeF &availableSize) override
-    {
-        const msimeui::SizeF pager = pager_->MeasureInLayout(availableSize);
-        const msimeui::SizeF list =
-            list_->MeasureInLayout({(std::max)(availableSize.width - pager.width, 1.0f), availableSize.height});
-        pagerWidth_ = pager.width;
-        return {list.width + pager.width, (std::max)(list.height, pager.height)};
-    }
-
-    void Arrange(const msimeui::RectF &finalRect) override
-    {
-        bounds_ = finalRect;
-        const float listWidth = (std::max)(finalRect.width - pagerWidth_, 0.0f);
-        list_->ArrangeInLayout({finalRect.x, finalRect.y, listWidth, finalRect.height});
-        pager_->ArrangeInLayout({finalRect.x + listWidth, finalRect.y, pagerWidth_, finalRect.height});
-    }
-
-    void Render(msimeui::DeviceResources &deviceResources) override
-    {
-        for (const auto &child : children_)
-        {
-            child->Render(deviceResources);
-        }
-    }
-
-  private:
-    msimeui::Visual *list_ = nullptr;
-    msimeui::Visual *pager_ = nullptr;
-    float pagerWidth_ = 0.0f;
-};
-
-D2D1_COLOR_F WithAlpha(D2D1_COLOR_F color, float alpha)
-{
-    color.a *= alpha;
-    return color;
 }
 
 // 候选窗 HWND 上的动图帧定时器。宿主自己的定时器编号见 ime_windows_internal.h（2–14），这里避开它们。
@@ -360,55 +139,27 @@ bool SystemTransparencyEnabled()
     return value != 0;
 }
 
-std::vector<CandidateSkinOverlay::Item> OverlayItems(const std::vector<CandidateSkinCatalog::FreeDecoration> &layer,
-                                                     const std::wstring &packageRoot)
-{
-    std::vector<CandidateSkinOverlay::Item> items;
-    for (const CandidateSkinCatalog::FreeDecoration &dec : layer)
-    {
-        CandidateSkinOverlay::Item item;
-        item.path = packageRoot + string_to_wstring(dec.image);
-        item.anchor = dec.anchor;
-        item.offsetXDip = static_cast<float>(dec.offsetXDip);
-        item.offsetYDip = static_cast<float>(dec.offsetYDip);
-        item.widthDip = static_cast<float>(dec.widthDip);
-        item.heightDip = static_cast<float>(dec.heightDip);
-        items.push_back(std::move(item));
-    }
-    return items;
-}
-
-msimeui::Thickness ToThickness(const CandidateSkinLayers::Edges &edges)
-{
-    return {static_cast<float>(edges.left), static_cast<float>(edges.top), static_cast<float>(edges.right),
-            static_cast<float>(edges.bottom)};
-}
-
 } // namespace
 
 struct CandidatePresenter::Impl
 {
     msimeui::DeviceResources resources;
     std::unique_ptr<msimeui::Window> window;
+    // 整棵候选框场景与套皮肤的逻辑（与设置页的皮肤预览共用）。下面几个是它里面的控件，候选窗要直接摆弄；
+    // 场景结构（排列方式、翻页箭头、卷轴展开）变了它们就换成新建的那一批（见 RebuildScene）。
+    CandidateSkinScene scene;
     std::shared_ptr<msimeui::StackPanel> root;
-    std::shared_ptr<msimeui::Image> decoration;
     std::shared_ptr<msimeui::Card> card;
-    // 卡片与 v2 挂件层放在同一格里：挂件层测量为 0，格子仍由卡片决定，挂件按 anchor 画到卡片外沿。
-    // 网格按子元素顺序绘制：下层挂件、卡片、上层挂件。
-    std::shared_ptr<msimeui::Grid> overlayGrid;
-    std::shared_ptr<CandidateSkinOverlay> skinOverlayBack;
-    std::shared_ptr<CandidateSkinOverlay> skinOverlayFront;
-    // 装饰图与卡片同列：列宽即卡片宽，装饰图在列内按 align 对齐，对应 CSS 里
-    // .containerParent 为 fit-content、::before 相对它定位。
-    std::shared_ptr<msimeui::StackPanel> cardColumn;
-    std::shared_ptr<msimeui::Container> frame;
-    std::shared_ptr<msimeui::StackPanel> body;
     std::shared_ptr<msimeui::TextBlock> preedit;
     std::shared_ptr<msimeui::CandidateList> list;
-    // 皮肤关掉翻页箭头时为空。场景按 sceneHorizontal / scenePageArrows 搭建，两者变了就重建。
+    // 皮肤关掉翻页箭头时为空。
     std::shared_ptr<msimeui::PagerArrows> pager;
-    bool sceneHorizontal = false;
-    bool scenePageArrows = false;
+    // 卷轴展开皮肤（横排）才有这几样，其余皮肤为空。开了展开就不放翻页箭头。
+    std::shared_ptr<CandidateExpandToggle> expandToggle;
+    std::shared_ptr<msimeui::CandidateList> expandGrid;
+    std::shared_ptr<CandidateExpandContent> expandContent;
+    std::shared_ptr<msimeui::ScrollViewer> expandScroller;
+    std::shared_ptr<CandidateExpandBody> expandBody;
     std::shared_ptr<msimeui::Popup> contextMenu;
     std::shared_ptr<msimeui::Popup> contextSubmenu;
     std::shared_ptr<msimeui::MenuFlyoutItem> fixPositionItem;
@@ -446,93 +197,53 @@ bool CandidatePresenter::Bind(HWND hwnd)
         return false;
     }
     impl_ = std::make_unique<Impl>();
+    // 场景里的点击都投递回候选窗的窗口过程，由宿主转给工作线程，不在鼠标分发途中改动状态。
+    CandidateSkinScene::Callbacks callbacks;
+    callbacks.itemActivated = [this](size_t index) { CommitItem(index); };
+    callbacks.itemContextMenu = [this](size_t index, const POINT &clientPoint) {
+        ShowItemContextMenu(index, clientPoint);
+    };
+    callbacks.pageArrow = [this](bool next) {
+        if (hwnd_)
+        {
+            PostMessageW(hwnd_, WM_PAGE_CANDIDATE_ARROW, next ? CANDIDATE_PAGE_NEXT : CANDIDATE_PAGE_PREVIOUS, 1);
+        }
+    };
+    callbacks.expandToggle = [this]() {
+        if (hwnd_)
+        {
+            PostMessageW(hwnd_, WM_TOGGLE_CANDIDATE_EXPAND, 0, 0);
+        }
+    };
+    callbacks.gridItemActivated = [this](size_t index) { CommitExpandedItem(index); };
+    impl_->scene = CandidateSkinScene(std::move(callbacks));
     impl_->window = std::make_unique<msimeui::Window>(L"metasequoiaime_windows", L"cand", 1, 1);
     impl_->window->AdoptExistingHwnd(hwnd);
     impl_->window->SetStealFocusOnClick(false);
     bound_ = impl_->resources.EnsureForComposition(hwnd);
-    RebuildScene();
+    // 先按当前皮肤搭好场景，第一次显示之前窗口就有内容可画。
+    ApplySkin();
     CAND_DIAG_LOGF(L"candidate-d2d bind hwnd={:#x} composition={}", reinterpret_cast<uintptr_t>(hwnd), bound_ ? 1 : 0);
     return bound_;
 }
 
 void CandidatePresenter::RebuildScene()
 {
-    if (!impl_ || !impl_->window)
+    if (!impl_ || !impl_->window || !impl_->scene.Root())
     {
         return;
     }
-    lastSkinFingerprint_.clear();
-    impl_->root = std::make_shared<msimeui::StackPanel>(0.0f);
-    impl_->decoration = std::make_shared<msimeui::Image>(L"");
-    impl_->decoration->SetHorizontalAlignment(msimeui::HorizontalAlignment::Trailing);
-    impl_->decoration->SetStretch(msimeui::ImageStretch::Uniform);
-    impl_->preedit = std::make_shared<msimeui::TextBlock>(L"", 14.0f, D2D1::ColorF(0xF5F5F5));
-    impl_->preedit->SetTextLayoutPadding({0.0f, 1.0f, 0.0f, 1.0f});
-    impl_->preedit->SetHorizontalAlignment(msimeui::HorizontalAlignment::Leading);
-    impl_->list = std::make_shared<msimeui::CandidateList>(28.0f);
-    impl_->list->SetOnItemActivated([this](size_t index) { CommitItem(index); });
-    impl_->list->SetOnContextMenu(
-        [this](size_t index, const POINT &clientPoint) { ShowItemContextMenu(index, clientPoint); });
-    impl_->body = std::make_shared<msimeui::StackPanel>(kBodyRowSpacingDip);
-    impl_->body->SetPadding({0.0f, 0.0f, 0.0f, 0.0f});
-    impl_->body->AddChild(impl_->preedit);
-    impl_->pager.reset();
-    if (impl_->scenePageArrows)
-    {
-        impl_->pager = std::make_shared<msimeui::PagerArrows>();
-        // 箭头在自己的槽位里贴右下角，槽位铺满即可（竖排是整行宽，横排是列表的整个高度）。
-        impl_->pager->SetVerticalAlignment(msimeui::VerticalAlignment::Stretch);
-        impl_->pager->SetOnClick([this](msimeui::PagerArrows::Part part) {
-            if (hwnd_)
-            {
-                PostMessageW(hwnd_, WM_PAGE_CANDIDATE_ARROW,
-                             part == msimeui::PagerArrows::Part::Next ? CANDIDATE_PAGE_NEXT : CANDIDATE_PAGE_PREVIOUS,
-                             1);
-            }
-        });
-    }
-    if (impl_->pager && impl_->sceneHorizontal)
-    {
-        impl_->body->AddChild(std::make_shared<CandidateRowWithPager>(impl_->list, impl_->pager));
-    }
-    else
-    {
-        // 竖排时箭头是列表下方单独的一矮行，靠右。
-        impl_->body->AddChild(impl_->list);
-        if (impl_->pager)
-            impl_->body->AddChild(impl_->pager);
-    }
-    msimeui::Brush brush;
-    brush.fill = D2D1::ColorF(0x202020);
-    brush.stroke = ParseCssColor("#9b9b9b2e", D2D1::ColorF(0x3A3A3A, 0.18f));
-    brush.strokeWidth = 1.5f;
-    brush.radiusX = 6.0f;
-    brush.radiusY = 6.0f;
-    impl_->card = std::make_shared<msimeui::Card>(brush, 5.0f);
-    impl_->card->SetHorizontalAlignment(msimeui::HorizontalAlignment::Leading);
-    impl_->card->AddChild(impl_->body);
-    impl_->root->SetHorizontalContentAlignment(msimeui::HorizontalAlignment::Leading);
-    impl_->overlayGrid = std::make_shared<msimeui::Grid>();
-    impl_->overlayGrid->AddRow(msimeui::GridLength{msimeui::GridUnitType::Auto, 1.0f});
-    impl_->overlayGrid->AddColumn(msimeui::GridLength{msimeui::GridUnitType::Auto, 1.0f});
-    for (auto *overlay : {&impl_->skinOverlayBack, &impl_->skinOverlayFront})
-    {
-        *overlay = std::make_shared<CandidateSkinOverlay>();
-        (*overlay)->SetHorizontalAlignment(msimeui::HorizontalAlignment::Stretch);
-        (*overlay)->SetVerticalAlignment(msimeui::VerticalAlignment::Stretch);
-    }
-    impl_->overlayGrid->AddChild(impl_->skinOverlayBack, 0, 0);
-    impl_->overlayGrid->AddChild(impl_->card, 0, 0);
-    impl_->overlayGrid->AddChild(impl_->skinOverlayFront, 0, 0);
-    impl_->cardColumn = std::make_shared<msimeui::StackPanel>(0.0f);
-    impl_->cardColumn->SetHorizontalAlignment(msimeui::HorizontalAlignment::Leading);
-    impl_->cardColumn->SetHorizontalContentAlignment(msimeui::HorizontalAlignment::Stretch);
-    impl_->cardColumn->AddChild(impl_->decoration);
-    impl_->cardColumn->AddChild(impl_->overlayGrid);
-    impl_->frame = std::make_shared<msimeui::Container>();
-    impl_->frame->SetPadding({kShadowPadLeft, kShadowPadTop, kShadowPadRight, kShadowPadBottom});
-    impl_->frame->SetChild(impl_->cardColumn);
-    impl_->root->AddChild(impl_->frame);
+    // 场景由 CandidateSkinScene 搭（设置页的皮肤预览用的是同一份），这里只留下候选窗要直接摆弄的控件。
+    impl_->root = impl_->scene.Root();
+    impl_->card = impl_->scene.CardVisual();
+    impl_->preedit = impl_->scene.Preedit();
+    impl_->list = impl_->scene.List();
+    impl_->pager = impl_->scene.Pager();
+    impl_->expandToggle = impl_->scene.ExpandToggle();
+    impl_->expandGrid = impl_->scene.ExpandGrid();
+    impl_->expandContent = impl_->scene.ExpandContent();
+    impl_->expandScroller = impl_->scene.ExpandScroller();
+    impl_->expandBody = impl_->scene.ExpandBody();
     auto scene = std::make_unique<msimeui::Scene>();
     scene->SetRoot(impl_->root);
     impl_->window->SetScene(std::move(scene));
@@ -540,7 +251,7 @@ void CandidatePresenter::RebuildScene()
 
 void CandidatePresenter::ApplySkin()
 {
-    if (!impl_ || !impl_->list || !impl_->preedit || !impl_->window)
+    if (!impl_ || !impl_->window)
     {
         return;
     }
@@ -556,6 +267,8 @@ void CandidatePresenter::ApplySkin()
                 << GetConfiguredCandidateWindowPreeditFontSize() << '|' << GetConfiguredCandidateWindowLayout() << '|'
                 << GetConfiguredCandidateTextColor() << '|' << GetConfiguredCandidateWindowPreeditStyle();
     fingerprint << '|' << GetConfiguredCandidateEnglishFont() << '|' << GetConfiguredCandidateWindowFitContent();
+    // 卷轴展开网格的列数上限跟每页候选数走。
+    fingerprint << '|' << GetConfiguredCandidatePageSize();
     // 同一个外部皮肤的 skin.toml 或图片改了，只有强制重载能看出来；带上重载代数让 D2D 也重读 manifest。
     fingerprint << '|' << GetCandidateSkinReloadRevision();
     // 亚克力皮肤在透明效果开关切换后要换底色和合成方式。
@@ -573,363 +286,51 @@ void CandidatePresenter::ApplySkin()
     StopAnimationFrames();
     animationClockRunning_ = false;
     impl_->resources.ClearImageCaches();
-    CandSkinTokens tokens;
-    if (candLight)
+
+    CandidateSkinScene::Settings settings;
+    settings.skinsRoot = std::filesystem::path(AssetRoot()) / L"skins";
+    settings.skinId = skinId;
+    settings.light = candLight;
+    settings.horizontal = GetConfiguredCandidateWindowLayout() == "horizontal";
+    settings.fontSize = static_cast<float>((std::max)(12, GetConfiguredCandidateFontSize()));
+    settings.preeditFontSize = static_cast<float>((std::max)(12, GetConfiguredCandidateWindowPreeditFontSize()));
+    settings.fontFamily = string_to_wstring(ResolveSystemFontFamilyForCss(GetConfiguredCandidateEnglishFont()));
+    settings.resolveFontFamily = [](const std::string &family) {
+        return string_to_wstring(ResolveSystemFontFamilyForCss(family));
+    };
+    for (const auto &font : GetConfiguredCandidateFallbackFontFamilies())
+        settings.fallbackFontFamilies.push_back(string_to_wstring(font));
+    settings.textColor = GetConfiguredCandidateTextColor();
+    settings.preeditHidden = GetConfiguredCandidateWindowPreeditStyle() == "empty";
+    settings.fitContent = GetConfiguredCandidateWindowFitContent();
+    settings.pageSize = GetConfiguredCandidatePageSize();
+    settings.framePadding = {kShadowPadLeft, kShadowPadTop, kShadowPadRight, kShadowPadBottom};
+    settings.backdropAvailable = !backdropUnavailable_ && SystemTransparencyEnabled();
+    const CandidateSkinScene::Result result = impl_->scene.Apply(settings);
+    if (result.rebuilt)
     {
-        tokens.number = D2D1::ColorF(26.0f / 255.0f, 26.0f / 255.0f, 26.0f / 255.0f, 0.55f);
-        tokens.selected = ColorFromRgb(0xE8E8E8);
-        tokens.hover = ColorFromRgb(0xECECEC);
-        tokens.menuFill = ColorFromRgb(0xFFFFFF);
-        tokens.menuBorder = D2D1::ColorF(0, 0.12f);
-        tokens.menuText = ColorFromRgb(0x1A1A1A);
-        tokens.menuHover = ColorFromRgb(0xECECEC);
-    }
-    const std::wstring skinsRoot = AssetRoot() + L"\\skins";
-    // 外部皮肤用声明支持当前布局与主题的那一份；不支持或读不出来就回退 fluent。
-    const std::string candidateLayout = GetConfiguredCandidateWindowLayout();
-    const std::string candidateTheme = candLight ? "light" : "dark";
-    std::optional<CandidateSkinCatalog::Package> package;
-    if (!CandidateSkinCatalog::IsBuiltIn(skinId))
-    {
-        package = CandidateSkinCatalog::LoadSupported(std::filesystem::path(skinsRoot), skinId, candidateLayout,
-                                                      candidateTheme);
-    }
-    // 自定义包的几何取自它的 base 皮肤；颜色随后由包覆盖。
-    const std::string baseSkin =
-        package ? package->base : (CandidateSkinCatalog::IsBuiltIn(skinId) ? skinId : std::string("fluent"));
-    // 横排时高亮内缩于外框，首项、尾项落在卡片四角上的那几个角与卡片同 R，其余角保持 itemRadius。
-    const bool horizontalLayout = candidateLayout == "horizontal";
-    // 翻页箭头改变的是场景结构（竖排多一行、横排多一列），开关或排列方式变了就整棵重建，
-    // 再往下套用配色与尺寸。重建会清掉指纹，这里补回去。
-    const bool pageArrows = CandidateSkinCatalog::ResolvePageArrows(std::filesystem::path(skinsRoot), skinId,
-                                                                    package ? &*package : nullptr);
-    if (pageArrows != impl_->scenePageArrows || horizontalLayout != impl_->sceneHorizontal)
-    {
-        impl_->scenePageArrows = pageArrows;
-        impl_->sceneHorizontal = horizontalLayout;
+        // 旧场景的展开面板随场景一起丢掉，界面与工作线程都回到收起状态。
+        SetExpanded(false);
         RebuildScene();
         lastSkinFingerprint_ = skinKey;
     }
-    fitContent_ = GetConfiguredCandidateWindowFitContent() ||
-                  CandidateSkinCatalog::ResolveFitContent(std::filesystem::path(skinsRoot), skinId,
-                                                          package ? &*package : nullptr);
-    const float fontSize = static_cast<float>((std::max)(12, GetConfiguredCandidateFontSize()));
-    if (baseSkin == "fluent")
-    {
-        if (horizontalLayout)
-            tokens.outerItemRadius = tokens.radius;
-        // 单词 Notion Purple，与强调色同一色相；词性 Notion Pink。
-        SetTranslationColors(tokens, candLight ? 0x6940A5 : 0x9A6DD7, candLight ? 0xAD1A72 : 0xE255A1);
-    }
-    else if (baseSkin == "wechat")
-    {
-        tokens.borderWidth = 1.0f;
-        tokens.radius = 5.0f;
-        tokens.containerPad = 2.0f;
-        if (horizontalLayout)
-            tokens.outerItemRadius = tokens.radius;
-        tokens.accent = ColorFromRgb(0x07C160);
-        tokens.selected = ColorFromRgb(0x07C160);
-        tokens.showSelectedBar = false;
-        tokens.rowTextSelected = ColorFromRgb(0xFFFFFF);
-        tokens.rowLabelSelected = ColorFromRgb(0xFFFFFF);
-        // 单词 Notion Blue，词性 Notion Green；选中行是实色绿底，单词换成半透明白，词性换 Notion Yellow。
-        SetTranslationColors(tokens, candLight ? 0x0B6E99 : 0x529CCA, candLight ? 0x0F7B6C : 0x4DAB9A);
-        SetSelectedTranslationColors(tokens, 0xFFFFFF, 0.8f, 0xFFDC49, 0.85f);
-        if (candLight)
-        {
-            tokens.hover = D2D1::ColorF(7.0f / 255.0f, 193.0f / 255.0f, 96.0f / 255.0f, 0.14f);
-            tokens.number = ColorFromRgb(0x757575);
-            tokens.menuFill = ColorFromRgb(0xFFFFFF);
-            tokens.menuBorder = ColorFromRgb(0xD9D9D9);
-            tokens.menuText = ColorFromRgb(0x333333);
-            tokens.menuHover = ColorFromRgb(0xEEEEEE);
-        }
-        else
-        {
-            tokens.hover = D2D1::ColorF(7.0f / 255.0f, 193.0f / 255.0f, 96.0f / 255.0f, 0.32f);
-            tokens.number = ColorFromRgb(0x858585);
-            tokens.menuFill = ColorFromRgb(0x1F1F1F);
-            tokens.menuBorder = ColorFromRgb(0x343434);
-            tokens.menuText = ColorFromRgb(0xD0D0D0);
-            tokens.menuHover = ColorFromRgb(0x2A2A2A);
-        }
-    }
-    else if (baseSkin == "willow_green")
-    {
-        tokens.borderWidth = 0.0f;
-        tokens.radius = 9.0f;
-        tokens.containerPad = 0.0f;
-        // 高亮整行（竖排）/整列（横排）铺满、左右贴着卡片边，行本身是直角；CSS 靠
-        // 容器 clip-path 裁出窗口圆角。D2D 的 Card 不裁剪子控件，所以改由列表把
-        // 落在卡片四角上的那几个角画成卡片的 9px，其余角保持直角。
-        tokens.itemRadius = 0.0f;
-        tokens.outerItemRadius = 9.0f;
-        tokens.itemGap = 0.0f;
-        tokens.justifyRows = true;
-        // 行内边距对齐 CSS 的 .row.cand padding（加上 .text 的左内边距），预编辑行对齐 .row.pinyin。
-        if (GetConfiguredCandidateWindowLayout() == "horizontal")
-        {
-            tokens.itemExtraHeight = 10.0f;
-            tokens.itemPadLeft = 6.0f;
-            tokens.itemPadRight = 10.0f;
-            tokens.preeditMargin = {3.0f, 6.0f, 5.0f, 1.0f};
-        }
-        else
-        {
-            tokens.itemExtraHeight = 8.0f;
-            tokens.itemPadLeft = 9.0f;
-            tokens.itemPadRight = 14.0f;
-            tokens.preeditMargin = {3.0f, 6.0f, 7.0f, 2.0f};
-        }
-        tokens.showSelectedBar = false;
-        tokens.rowTextSelected = ColorFromRgb(0xFFFFFF);
-        tokens.rowLabelSelected = ColorFromRgb(0xFFFFFF);
-        // 单词 Notion Green，词性 Notion Blue；选中行是实色绿底，单词换成半透明白，词性换 Notion Yellow。
-        SetTranslationColors(tokens, candLight ? 0x0F7B6C : 0x4DAB9A, candLight ? 0x0B6E99 : 0x529CCA);
-        SetSelectedTranslationColors(tokens, 0xFFFFFF, 0.8f, 0xFFDC49, 0.85f);
-        if (candLight)
-        {
-            tokens.accent = ColorFromRgb(0x58B980);
-            tokens.selected = ColorFromRgb(0x58B980);
-            tokens.hover = D2D1::ColorF(88.0f / 255.0f, 185.0f / 255.0f, 128.0f / 255.0f, 0.16f);
-            tokens.number = ColorFromRgb(0x686F6A);
-            tokens.menuFill = ColorFromRgb(0xFBFCFA);
-            tokens.menuBorder = ColorFromRgb(0xD8DED9);
-            tokens.menuText = ColorFromRgb(0x343936);
-            tokens.menuHover = ColorFromRgb(0xE9EEEA);
-        }
-        else
-        {
-            tokens.accent = ColorFromRgb(0x65C98D);
-            tokens.selected = ColorFromRgb(0x65C98D);
-            tokens.hover = D2D1::ColorF(101.0f / 255.0f, 201.0f / 255.0f, 141.0f / 255.0f, 0.22f);
-            tokens.number = ColorFromRgb(0xA6ABA7);
-            tokens.menuFill = ColorFromRgb(0x343635);
-            tokens.menuBorder = ColorFromRgb(0x454845);
-            tokens.menuText = ColorFromRgb(0xE0E2DF);
-            tokens.menuHover = ColorFromRgb(0x414441);
-        }
-    }
-    else if (baseSkin == "graphite")
-    {
-        tokens.borderWidth = 1.0f;
-        tokens.radius = 3.0f;
-        tokens.containerPad = 5.0f;
-        tokens.itemRadius = 2.0f;
-        tokens.selected = D2D1::ColorF(0, 0.0f);
-        tokens.showSelectedBar = false;
-        // 单词 Notion Brown，石墨铅笔的木杆色，压在冷灰底上不抢候选；词性 Notion Orange。
-        SetTranslationColors(tokens, candLight ? 0x64473A : 0x937264, candLight ? 0xD9730D : 0xFFA344);
-        if (candLight)
-        {
-            tokens.accent = ColorFromRgb(0x5F6B7A);
-            tokens.hover = D2D1::ColorF(31.0f / 255.0f, 41.0f / 255.0f, 55.0f / 255.0f, 0.055f);
-            tokens.number = ColorFromRgb(0x8993A1);
-            tokens.rowTextSelected = ColorFromRgb(0x111827);
-            tokens.rowLabelSelected = ColorFromRgb(0x111827);
-            tokens.menuFill = ColorFromRgb(0xFFFFFF);
-            tokens.menuBorder = ColorFromRgb(0xDFE3E8);
-            tokens.menuText = ColorFromRgb(0x374151);
-            tokens.menuHover = ColorFromRgb(0xF1F3F5);
-        }
-        else
-        {
-            tokens.accent = ColorFromRgb(0x8993A0);
-            tokens.hover = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.055f);
-            tokens.number = ColorFromRgb(0x707987);
-            tokens.rowTextSelected = ColorFromRgb(0xF1F3F5);
-            tokens.rowLabelSelected = ColorFromRgb(0xF1F3F5);
-            tokens.menuFill = ColorFromRgb(0x23272C);
-            tokens.menuBorder = ColorFromRgb(0x3A4047);
-            tokens.menuText = ColorFromRgb(0xC7CDD5);
-            tokens.menuHover = ColorFromRgb(0x30353B);
-        }
-    }
-    else if (baseSkin == "autumn_osmanthus")
-    {
-        tokens.borderWidth = 0.0f;
-        tokens.radius = 10.0f;
-        tokens.containerPad = 5.0f;
-        // 高亮块内缩在卡片里：普通角 6px，贴着卡片四角的那几个角与卡片同为 10px
-        // （首项顶部两角、尾项底部两角），对应 CSS 的 --ao-radius / --ao-item-radius。
-        tokens.itemRadius = 6.0f;
-        tokens.outerItemRadius = 10.0f;
-        tokens.showSelectedBar = false;
-        // 翻译：浅色单词 Notion Orange、词性 Notion Red，选中行的淡黄高亮上单词换 Notion Brown；
-        // 深色单词 Notion Yellow、词性 Notion Orange，选中行橙底上单词换半透明白、词性换 Notion Brown。
-        if (candLight)
-        {
-            SetTranslationColors(tokens, 0xD9730D, 0xE03E3E);
-            SetSelectedTranslationColors(tokens, 0x64473A, 1.0f, 0xE03E3E, kTranslationPosAlpha);
-            tokens.accent = ColorFromRgb(0xE6A817);
-            tokens.selected = ColorFromRgb(0xFFE399);
-            tokens.hover = D2D1::ColorF(255.0f / 255.0f, 227.0f / 255.0f, 153.0f / 255.0f, 0.55f);
-            tokens.number = ColorFromRgb(0x5B727B);
-            tokens.rowTextSelected = ColorFromRgb(0x1A1A1A);
-            tokens.rowLabelSelected = ColorFromRgb(0x1A1A1A);
-            tokens.menuFill = ColorFromRgb(0xE8F5F7);
-            tokens.menuBorder = ColorFromRgb(0xBCD8DE);
-            tokens.menuText = ColorFromRgb(0x1F3138);
-            tokens.menuHover = ColorFromRgb(0xD2E8EC);
-        }
-        else
-        {
-            SetTranslationColors(tokens, 0xFFDC49, 0xFFA344);
-            SetSelectedTranslationColors(tokens, 0xFFFFFF, 0.8f, 0x64473A, 0.85f);
-            tokens.accent = ColorFromRgb(0xF97D0A);
-            tokens.selected = ColorFromRgb(0xF97D0A);
-            tokens.hover = D2D1::ColorF(249.0f / 255.0f, 125.0f / 255.0f, 10.0f / 255.0f, 0.30f);
-            tokens.number = ColorFromRgb(0xE1E8EC);
-            tokens.rowTextSelected = ColorFromRgb(0xFFFFFF);
-            tokens.rowLabelSelected = ColorFromRgb(0xFFFFFF);
-            tokens.menuFill = ColorFromRgb(0x6F8491);
-            tokens.menuBorder = ColorFromRgb(0x8CA0AC);
-            tokens.menuText = ColorFromRgb(0xF5F8FA);
-            tokens.menuHover = ColorFromRgb(0x637885);
-        }
-    }
-    else if (baseSkin == "microsoft")
-    {
-        // 几何随字号缩放（按 em 比例）。
-        tokens.borderWidth = 1.0f;
-        tokens.radius = 8.0f;
-        tokens.containerPad = std::round(fontSize * 0.3f);
-        tokens.itemRadius = 4.0f;
-        tokens.itemExtraHeight = std::round(fontSize * 0.24f);
-        // 序号左端距高亮左缘 0.4em，其中 5 DIP 是列表固定的 textPadLeft。
-        tokens.itemPadLeft = (std::max)(0.0f, std::round(fontSize * 0.4f) - 5.0f);
-        tokens.itemPadRight = std::round(fontSize * 0.3f);
-        if (horizontalLayout)
-        {
-            tokens.itemGap = std::round(fontSize * 0.15f);
-            tokens.minItemWidth = std::round(fontSize * 3.5f);
-        }
-        tokens.labelScale = 1.0f;
-        tokens.labelGap = std::round(fontSize * 0.2f);
-        tokens.selectedBarWidth = 3.0f;
-        tokens.selectedBarHeightEm = 0.9f;
-        tokens.selectedBarInside = true;
-        tokens.trianglePager = true;
-        tokens.trimHiddenPreeditGap = true;
-        tokens.accent = ColorFromRgb(0xE183D9);
-        // 单词 Notion Pink，与粉色选中条同一色相；词性 Notion Purple。
-        SetTranslationColors(tokens, candLight ? 0xAD1A72 : 0xE255A1, candLight ? 0x6940A5 : 0x9A6DD7);
-        if (candLight)
-        {
-            tokens.selected = ColorFromRgb(0xEAEAEA);
-            tokens.hover = ColorFromRgb(0xF0F0F0);
-            tokens.number = ColorFromRgb(0x5F5F5F);
-            tokens.pagerDivider = ColorFromRgb(0xE0E0E0);
-            tokens.menuFill = ColorFromRgb(0xF9F9F9);
-            tokens.menuBorder = D2D1::ColorF(0, 0.1f);
-            tokens.menuText = ColorFromRgb(0x1A1A1A);
-            tokens.menuHover = ColorFromRgb(0xEAEAEA);
-        }
-        else
-        {
-            tokens.selected = ColorFromRgb(0x383838);
-            tokens.hover = ColorFromRgb(0x353535);
-            tokens.number = ColorFromRgb(0xCFCFCF);
-            tokens.pagerDivider = ColorFromRgb(0x3D3D3D);
-            tokens.menuFill = ColorFromRgb(0x2C2C2C);
-            tokens.menuBorder = ColorFromRgb(0x1C1C1C);
-            tokens.menuText = ColorFromRgb(0xFFFFFF);
-            tokens.menuHover = ColorFromRgb(0x383838);
-        }
-    }
-    else if (CandidateSkinCatalog::IsCanvasBase(baseSkin))
-    {
-        // 全贴图基底：面板透明、无描边、直角，外观交给九宫格贴图与挂件（阴影在下面按皮肤决定）。
-        // 文字与高亮取不依赖底色的中性色：深色主题近白字配白色半透明高亮，浅色主题近黑字配黑色半透明高亮，
-        // 叠在大多数贴图上都可读；皮肤用 [candidate.dark] / [candidate.light] 覆盖。
-        tokens.borderWidth = 0.0f;
-        tokens.radius = 0.0f;
-        tokens.containerPad = 5.0f;
-        tokens.itemRadius = 4.0f;
-        tokens.number = candLight ? D2D1::ColorF(26.0f / 255.0f, 26.0f / 255.0f, 26.0f / 255.0f, 0.6f)
-                                  : ColorFromRgb(0xF2F2F2, 0.62f);
-        tokens.selected = candLight ? D2D1::ColorF(0, 0.10f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f);
-        tokens.hover = candLight ? D2D1::ColorF(0, 0.06f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.09f);
-        // 翻译同 fluent：单词 Notion Purple，词性 Notion Pink。
-        SetTranslationColors(tokens, candLight ? 0x6940A5 : 0x9A6DD7, candLight ? 0xAD1A72 : 0xE255A1);
-    }
-
-    if (package)
-    {
-        ApplyPackageColors(candLight ? package->light : package->dark, tokens);
-        // 自定义圆角：外框和贴着外框四角的高亮角一起换成 R，普通高亮角不变。
-        if (package->cornerRadiusDip)
-        {
-            tokens.radius = static_cast<float>(*package->cornerRadiusDip);
-            // 贴角规则以 outerItemRadius > 0 为开关；R 为 0 时仍要保持开启，否则贴角的
-            // 高亮会退回普通圆角、从直角外框里探出来。
-            if (tokens.outerItemRadius > 0.0f)
-                tokens.outerItemRadius = (std::max)(tokens.radius, 0.01f);
-        }
-        if (package->borderWidthDip)
-            tokens.borderWidth = static_cast<float>(*package->borderWidthDip);
-        // 只改普通高亮角；贴着卡片四角的那几个角仍跟卡片圆角。
-        if (package->itemCornerRadiusDip)
-            tokens.itemRadius = static_cast<float>(*package->itemCornerRadiusDip);
-    }
-    const CandidateSkinCatalog::CandidateColors *packageColors =
-        package ? &(candLight ? package->light : package->dark) : nullptr;
-    const CandidateSkinPalette palette =
-        ResolveCandidateSkinPalette(baseSkin, candLight, GetConfiguredCandidateTextColor(), packageColors);
-    tokens.surface = palette.surface;
-    tokens.border = palette.border;
-    tokens.text = palette.text;
-    // 阴影跟皮肤走：四套内置皮肤与自定义包共用同一对阴影——
-    // light `8px 10px 24px rgba(0,0,0,.18), 2px 3px 8px rgba(0,0,0,.10)`，dark α .34/.22；
-    // σ = blur ÷ 2。默认皮肤直接关阴影。
-    // v2 面板贴图：有它时卡片自己的底色、描边、圆角和阴影都让给贴图（同 CSS border-image）。
-    const bool panelImage =
-        package && package->schemaVersion >= 2 && package->borderImage && !package->borderImage->source.empty();
-    const bool canvasBase = CandidateSkinCatalog::IsCanvasBase(baseSkin);
-    skinAnimates_ = package && package->schemaVersion >= 2;
-    // 面板贴图盖住整张卡片，垫系统材质没有意义。
-    const bool wantsBackdrop = package && !package->backdrop.empty() && package->backdrop != "none" && !panelImage;
-    backdropActive_ = wantsBackdrop && !backdropUnavailable_ && SystemTransparencyEnabled();
+    const CandSkinTokens &tokens = result.tokens;
+    expandRows_ = result.expandRows;
+    expandRowStepDip_ = result.expandRowStepDip;
+    fitContent_ = result.fitContent;
+    cardMinWidthDip_ = result.cardMinWidthDip;
+    skinAnimates_ = result.skinAnimates;
+    backdropActive_ = result.backdropActive;
     backdropRadiusDip_ = tokens.radius;
     if (backdropActive_)
     {
-        // 色调由合成层按 Fluent 材质配方画（模糊 → 亮度层 → 色调），D2D 卡片底色此时留空。
-        const bool mica = package->backdrop == "mica";
-        const CandidateSkinCatalog::CandidateColors &themeColors = candLight ? package->light : package->dark;
-        msimeui::BackdropMaterial material;
-        material.source =
-            mica ? msimeui::BackdropMaterial::Source::Wallpaper : msimeui::BackdropMaterial::Source::WindowsBehind;
-        material.tint = tokens.surface;
-        material.tintOpacity = static_cast<float>(themeColors.backdropOpacity.value_or(tokens.surface.a));
-        material.luminosityOpacity = static_cast<float>(themeColors.backdropLuminosity.value_or(mica ? 1.0 : 0.85));
-        impl_->resources.SetBackdropMaterial(material);
+        impl_->resources.SetBackdropMaterial(result.backdropMaterial);
     }
     impl_->resources.SetBackdropComposition(backdropActive_);
-    if (impl_->card)
-    {
-        const std::string shadow = package ? package->shadow : std::string{};
-        // canvas 默认没有阴影，皮肤写了 soft / strong 才有；面板贴图在时一律不画。
-        const bool shadowOn = shadow != "none" && !(canvasBase && shadow.empty()) && !panelImage;
-        if (shadowOn)
-        {
-            // 外部皮肤的 shadow = soft / strong 按同一系数缩放两层不透明度。
-            const float scale = ShadowAlphaScale(shadow);
-            const auto alpha = [scale](float value) { return (std::min)(value * scale, 1.0f); };
-            const std::vector<msimeui::ShadowPass> shadowPasses = {
-                {12.0f, alpha(candLight ? 0.18f : 0.34f), 8.0f, 10.0f},
-                {4.0f, alpha(candLight ? 0.10f : 0.22f), 2.0f, 3.0f},
-            };
-            impl_->card->SetShadowEnabled(true);
-            impl_->card->SetShadowPasses(shadowPasses);
-            // 卡片底色半透明时阴影会透上来把毛玻璃压暗，只画在卡片外面。
-            impl_->card->SetShadowOutsideOnly(backdropActive_);
-        }
-        else
-        {
-            impl_->card->SetShadowEnabled(false);
-        }
-    }
+    impl_->menuFill = tokens.menuFill;
+    impl_->menuBorder = tokens.menuBorder;
+    impl_->menuText = tokens.menuText;
+    impl_->menuHover = tokens.menuHover;
 
     msimeui::Theme theme = msimeui::ThemeManager::GetCurrent();
     theme.textInputFontFamily = string_to_wstring(GetConfiguredCandidateFont());
@@ -940,280 +341,11 @@ void CandidatePresenter::ApplySkin()
     theme.uiFontFamily = theme.textInputFontFamily;
     theme.surface = tokens.surface;
     theme.border = tokens.border;
-    theme.textPrimary = palette.text;
+    theme.textPrimary = result.palette.text;
     theme.textSecondary = tokens.number;
     theme.primary = tokens.accent;
     theme.windowBackground = D2D1::ColorF(0, 0.0f);
     msimeui::ThemeManager::SetCurrent(theme);
-
-    const float preeditSize = static_cast<float>((std::max)(12, GetConfiguredCandidateWindowPreeditFontSize()));
-    msimeui::CandidateList::Appearance appearance;
-    appearance.fontFamily = string_to_wstring(ResolveSystemFontFamilyForCss(GetConfiguredCandidateEnglishFont()));
-    // 皮肤的 font_family 排在最前，用户配置的字体整体退为回退。
-    if (package && !package->fontFamily.empty())
-    {
-        appearance.fallbackFontFamilies.push_back(appearance.fontFamily);
-        appearance.fontFamily = string_to_wstring(ResolveSystemFontFamilyForCss(package->fontFamily));
-    }
-    for (const auto &font : GetConfiguredCandidateFallbackFontFamilies())
-        appearance.fallbackFontFamilies.push_back(string_to_wstring(font));
-    appearance.itemHeight = fontSize * 1.35f + tokens.itemExtraHeight;
-    appearance.itemGap = tokens.itemGap;
-    appearance.fontSize = fontSize;
-    appearance.labelFontSize = fontSize * tokens.labelScale;
-    appearance.annotationFontSize = fontSize;
-    appearance.contentPadLeft = tokens.itemPadLeft;
-    appearance.contentPadRight = tokens.itemPadRight;
-    // itemExtraHeight 上下各半：横排翻译换到第二行时从下半段内边距上方开始，内边距留在翻译下面，
-    // 对应 CSS 里 .row.cand 的 padding 包住整个 .text（杨柳青横排上下各 6px）。
-    appearance.contentPadBottom = tokens.itemExtraHeight * 0.5f;
-    appearance.textPadLeft = 5.0f;
-    appearance.labelGap = tokens.labelGap;
-    appearance.minItemWidth = tokens.minItemWidth;
-    // 收紧宽度时右侧留白与序号左侧的留白相同，卡片两边对称。
-    appearance.fitContent = fitContent_;
-    if (fitContent_)
-        appearance.contentPadRight = appearance.contentPadLeft + appearance.textPadLeft;
-    appearance.selectedBarWidth = tokens.selectedBarWidth;
-    appearance.selectedBarHeight = fontSize * tokens.selectedBarHeightEm;
-    appearance.selectedBarInside = tokens.selectedBarInside;
-    appearance.showSelectedBar = tokens.showSelectedBar;
-    appearance.selectedBarColor = tokens.selectedBar.a > 0.001f ? tokens.selectedBar : tokens.accent;
-    appearance.cornerRadius = tokens.itemRadius;
-    // 预编辑行隐藏时列表顶边才贴着卡片顶边，与 CSS 的 .preedit-hidden 同一判据。
-    const bool preeditHidden = GetConfiguredCandidateWindowPreeditStyle() == "empty";
-    appearance.outerCornerRadius = tokens.outerItemRadius;
-    appearance.outerTopCornersEnabled = preeditHidden;
-    appearance.justifyHorizontalRows = tokens.justifyRows;
-    // 隐藏的预编辑行高度为 0，但 body 仍在它和列表之间留 2px 行距；贴角皮肤把它抵掉，
-    // 让首项贴着卡片的内容顶边（秋桂四边内边距一致，杨柳青高亮直抵卡片顶边）。
-    if (preeditHidden)
-    {
-        impl_->preedit->SetMargin(
-            {0.0f, 0.0f, 0.0f, tokens.outerItemRadius > 0.0f || tokens.trimHiddenPreeditGap ? -2.0f : 0.0f});
-    }
-    else
-    {
-        msimeui::Thickness preeditMargin = tokens.preeditMargin;
-        // v2 的 line_gap_dip 只是预编辑行与候选之间的距离（原 CSS 的 .row.pinyin margin-bottom），
-        // 列表与翻页箭头之间仍是 body 的 2 DIP 行距，所以落在预编辑行的下外边距上，再抵掉那 2 DIP。
-        if (package && package->schemaVersion >= 2 && package->lineGapDip)
-            preeditMargin.bottom = static_cast<float>(*package->lineGapDip) - kBodyRowSpacingDip;
-        impl_->preedit->SetMargin(preeditMargin);
-    }
-    appearance.textColor = palette.candidateText;
-    appearance.labelColor = tokens.number;
-    appearance.annotationColor = palette.candidateText;
-    appearance.translationColor = tokens.translation;
-    appearance.rowTranslationSelected = tokens.rowTranslationSelected;
-    appearance.translationSecondaryColor = tokens.translationPos;
-    appearance.translationDelimiterColor = tokens.translationSeparator;
-    appearance.rowTranslationSecondarySelected = tokens.rowTranslationPosSelected;
-    appearance.rowTranslationDelimiterSelected = tokens.rowTranslationSeparatorSelected;
-    appearance.rowFillSelected = tokens.selected;
-    appearance.rowFillHover = tokens.hover;
-    appearance.rowFillPressed = tokens.selected;
-    appearance.rowTextSelected = tokens.rowTextSelected;
-    appearance.rowLabelSelected = tokens.rowLabelSelected;
-    impl_->menuFill = tokens.menuFill;
-    impl_->menuBorder = tokens.menuBorder;
-    impl_->menuText = tokens.menuText;
-    impl_->menuHover = tokens.menuHover;
-    impl_->list->SetAppearance(appearance);
-    impl_->list->SetOrientation(GetConfiguredCandidateWindowLayout() == "horizontal"
-                                    ? msimeui::CandidateList::Orientation::Horizontal
-                                    : msimeui::CandidateList::Orientation::Vertical);
-    if (impl_->pager)
-    {
-        // 箭头跟着候选字号缩放，与序号差不多大；颜色用序号色，悬停底色沿用候选项的悬停色。
-        msimeui::PagerArrows::Appearance pagerAppearance;
-        pagerAppearance.buttonWidth = std::round(fontSize * 0.72f);
-        pagerAppearance.buttonHeight = std::round(fontSize * 0.9f);
-        pagerAppearance.gap = 1.0f;
-        pagerAppearance.glyphSize = fontSize * 0.5f;
-        pagerAppearance.strokeWidth = (std::max)(1.2f, fontSize / 13.0f);
-        pagerAppearance.cornerRadius = (std::min)(3.0f, tokens.itemRadius);
-        pagerAppearance.glyphColor = tokens.number;
-        pagerAppearance.disabledGlyphColor = WithAlpha(tokens.number, 0.3f);
-        pagerAppearance.hoverFill = tokens.hover;
-        pagerAppearance.pressedFill = tokens.selected.a > 0.001f ? tokens.selected : tokens.hover;
-        if (tokens.trianglePager)
-        {
-            // 微软拼音式：候选文字色的实心三角，按钮与候选行等高。横排时按钮更宽，前面隔一条分隔线，
-            // 与 CSS 的 .page-arrow 同一组 em 尺寸。
-            pagerAppearance.glyph = msimeui::PagerArrows::Glyph::Triangle;
-            // 高 0.52em、宽 0.44em，三个角各圆掉高度的八分之三，尖端是钝的。
-            pagerAppearance.glyphSize = fontSize * 0.52f;
-            pagerAppearance.strokeWidth = pagerAppearance.glyphSize * 0.375f;
-            pagerAppearance.cornerRadius = tokens.itemRadius;
-            pagerAppearance.gap = 0.0f;
-            pagerAppearance.glyphColor = palette.candidateText;
-            pagerAppearance.disabledGlyphColor = WithAlpha(palette.candidateText, 0.25f);
-            pagerAppearance.buttonHeight = std::round(appearance.itemHeight);
-            if (horizontalLayout)
-            {
-                pagerAppearance.buttonWidth = std::round(fontSize * 0.96f);
-                pagerAppearance.dividerWidth = 1.0f;
-                pagerAppearance.dividerGap = std::round(fontSize * 0.12f);
-                pagerAppearance.dividerColor = tokens.pagerDivider;
-            }
-            else
-            {
-                pagerAppearance.buttonWidth = std::round(fontSize * 0.81f);
-                pagerAppearance.buttonHeight = std::round(fontSize * 1.2f);
-            }
-        }
-        impl_->pager->SetAppearance(pagerAppearance);
-        if (horizontalLayout && tokens.trianglePager)
-        {
-            // 与最后一项隔 0.3em，按钮与行等高，不用再抬。
-            impl_->pager->SetMargin({std::round(fontSize * 0.3f), 0.0f, 0.0f, 0.0f});
-        }
-        else if (horizontalLayout)
-        {
-            // 横排：窄列与候选之间留一点空，箭头竖直居中在最后一行上。
-            const float lift = (std::max)(0.0f, (appearance.itemHeight - pagerAppearance.buttonHeight) * 0.5f);
-            impl_->pager->SetMargin({2.0f, 0.0f, 1.0f, lift});
-        }
-        else
-        {
-            // 竖排：矮行抵掉 body 的 2px 行距，贴着最后一个候选、靠左，“‹”的左端与序号左端对齐。
-            // 序号从候选行的 contentPadLeft + textPadLeft 处开始；箭头在按钮里居中，要减去它左侧的留白。
-            impl_->pager->SetHorizontalAlignment(msimeui::HorizontalAlignment::Leading);
-            const float labelLeft = appearance.contentPadLeft + appearance.textPadLeft;
-            const float glyphInset = (pagerAppearance.buttonWidth - pagerAppearance.GlyphWidth()) * 0.5f;
-            impl_->pager->SetMargin({labelLeft - glyphInset, -1.0f, 0.0f, 1.0f});
-        }
-    }
-    impl_->preedit->SetFontFamily(appearance.fontFamily);
-    impl_->preedit->SetFallbackFontFamilies(appearance.fallbackFontFamilies);
-    impl_->preedit->SetFontSize(preeditSize);
-    impl_->preedit->SetColor(palette.preeditText);
-    impl_->preedit->SetCaretColor(tokens.preeditCaret.a > 0.001f ? tokens.preeditCaret : tokens.accent);
-    impl_->preedit->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    impl_->preedit->SetTextLayoutPadding({5.0f, 0.0f, 5.0f, 0.0f});
-    // 预编辑背景与分隔线对应 CSS 的 .pinyin background / border-bottom：底色带与高亮同圆角，分隔线固定 1px；
-    // 有其一时预编辑行横向铺满，否则底色只包住文字。
-    impl_->preedit->SetBackground(tokens.preeditBackground, tokens.itemRadius);
-    impl_->preedit->SetBottomRule(tokens.preeditDivider, 1.0f);
-    impl_->preedit->SetHorizontalAlignment(tokens.preeditBackground.a > 0.001f || tokens.preeditDivider.a > 0.001f
-                                               ? msimeui::HorizontalAlignment::Stretch
-                                               : msimeui::HorizontalAlignment::Leading);
-
-    // 装饰图是宽 width_dip、高 top_inset_dip 的盒子，
-    // 底边贴着卡片顶边、不与卡片重叠，按 align 贴卡片左/中/右，图片在盒内等比居中（contain）。
-    decorationTopDip_ = 0.0f;
-    decorationWidthDip_ = 0.0f;
-    cardMinWidthDip_ = fitContent_ ? 0.0f : kCandidateMinWidthDip;
-    std::wstring decorationPath;
-    std::wstring backgroundPath;
-    const std::wstring packageRoot = package ? skinsRoot + L"\\" + string_to_wstring(package->id) + L"\\" : L"";
-    if (package)
-    {
-        decorationTopDip_ = static_cast<float>(package->decorationTopDip);
-        decorationWidthDip_ = static_cast<float>(package->decorationWidthDip);
-        if (!package->decorationImage.empty())
-            decorationPath = packageRoot + string_to_wstring(package->decorationImage);
-        if (!package->backgroundImage.empty())
-            backgroundPath = packageRoot + string_to_wstring(package->backgroundImage);
-        cardMinWidthDip_ =
-            (std::max)({cardMinWidthDip_, static_cast<float>(package->minWidthDip), decorationWidthDip_});
-    }
-    // 卡片上方留给阴影的 kShadowPadTop 与装饰盒重叠，装饰盒高过它时不再额外留白。
-    float framePadTop = kShadowPadTop;
-    if (decorationPath.empty() || decorationTopDip_ <= 0.0f)
-    {
-        impl_->decoration->SetHeight(0.0f);
-        impl_->decoration->ClearWidth();
-        impl_->decoration->SetSource(L"");
-    }
-    else
-    {
-        impl_->decoration->SetSource(decorationPath);
-        impl_->decoration->SetHeight(decorationTopDip_);
-        impl_->decoration->SetWidth(decorationWidthDip_);
-        impl_->decoration->SetHorizontalAlignment(DecorationAlignment(package->decorationAlign));
-        framePadTop = (std::max)(0.0f, kShadowPadTop - decorationTopDip_);
-    }
-    // v2 挂件挂在卡片外沿，窗口要按 outer_insets_dip 往四边多留出空白，否则立绘被窗口边界裁掉。
-    float framePadLeft = kShadowPadLeft;
-    float framePadRight = kShadowPadRight;
-    float framePadBottom = kShadowPadBottom;
-    if (package && package->outerInsetsDip)
-    {
-        const CandidateSkinCatalog::InsetsDip &outer = *package->outerInsetsDip;
-        framePadLeft += static_cast<float>(outer.left);
-        framePadRight += static_cast<float>(outer.right);
-        framePadTop += static_cast<float>(outer.top);
-        framePadBottom += static_cast<float>(outer.bottom);
-    }
-    if (impl_->frame)
-    {
-        impl_->frame->SetPadding({framePadLeft, framePadTop, framePadRight, framePadBottom});
-    }
-
-    // v2 自由挂件交给两层 overlay 绘制，都测量为 0、不参与卡片布局：z_index 低于 kDecorationFrontZIndex 的
-    // 在卡片之前绘制（面板之下），其余在卡片之后（面板与文字之上）。同层按 z_index、再按声明顺序叠放。
-    {
-        CandidateSkinLayers::Layers layers;
-        if (package && package->schemaVersion >= 2)
-            layers = CandidateSkinLayers::SplitDecorations(package->freeDecorations);
-        if (impl_->skinOverlayBack)
-            impl_->skinOverlayBack->SetItems(OverlayItems(layers.below, packageRoot));
-        if (impl_->skinOverlayFront)
-            impl_->skinOverlayFront->SetItems(OverlayItems(layers.above, packageRoot));
-    }
-
-    msimeui::Brush brush;
-    brush.fill = tokens.surface;
-    // 有系统材质时色调已经画在合成层里，卡片不再叠底色；皮肤要材质却用不上（透明效果关闭或系统不支持）时
-    // 把半透明底色补成不透明，免得直接透出后面的窗口。
-    if (backdropActive_)
-        brush.fill.a = 0.0f;
-    else if (wantsBackdrop)
-        brush.fill.a = 1.0f;
-    brush.stroke = tokens.border;
-    brush.strokeWidth = tokens.borderWidth;
-    brush.radiusX = tokens.radius;
-    brush.radiusY = tokens.radius;
-    if (panelImage)
-    {
-        brush.fill = D2D1::ColorF(0, 0.0f);
-        brush.stroke = D2D1::ColorF(0, 0.0f);
-        brush.strokeWidth = 0.0f;
-        brush.radiusX = 0.0f;
-        brush.radiusY = 0.0f;
-    }
-    if (impl_->card)
-    {
-        impl_->card->SetBrush(brush);
-        if (package && package->schemaVersion >= 2)
-        {
-            // 内容从面板外缘量起：content_insets_dip，或九宫格边宽加基底内边距，不会压到边框贴图上。
-            impl_->card->SetPadding(
-                ToThickness(CandidateSkinLayers::ResolveContentPadding(*package, tokens.containerPad)));
-        }
-        else
-        {
-            impl_->card->SetPadding(tokens.containerPad);
-        }
-        impl_->card->SetMinWidth(cardMinWidthDip_);
-        if (panelImage)
-        {
-            // CSS border-image 语义：切片以源图像素计，边宽以 DIP 计，fill 决定是否画中心块。
-            // 浅色主题有 light_source 时换那张图，几何不变。
-            const CandidateSkinLayers::NineSlice nine = CandidateSkinLayers::ResolveNineSlice(*package->borderImage);
-            impl_->card->SetBackgroundNineSlice(
-                packageRoot +
-                    string_to_wstring(CandidateSkinCatalog::BorderImageSource(*package->borderImage, candLight)),
-                msimeui::NineSlice{ToThickness(nine.slice), ToThickness(nine.width), nine.fill}, 1.0f);
-        }
-        else
-        {
-            impl_->card->SetBackgroundImage(backgroundPath, BackgroundStretch(package ? package->backgroundFit : ""),
-                                            package ? static_cast<float>(package->backgroundOpacity) : 1.0f);
-        }
-    }
 }
 
 std::uint64_t CandidatePresenter::FillItemsFromUi()
@@ -1256,6 +388,36 @@ std::uint64_t CandidatePresenter::FillItemsFromUi()
     {
         impl_->pager->SetEnabled(page->has_previous_page, page->has_next_page);
     }
+    if (impl_->expandBody)
+    {
+        std::vector<msimeui::CandidateList::Item> gridItems;
+        if (expanded_)
+        {
+            // 换了一批后续候选（新的一页或别的输入）就回到顶部；只是往后追加了候选则保持滚动位置。
+            const bool sameContent = page->expanded_start == expandedStart_ && !expandedWords_.empty() &&
+                                     !page->expanded_words.empty() &&
+                                     page->expanded_words.front() == expandedWords_.front();
+            if (!sameContent)
+            {
+                impl_->expandScroller->SetScrollOffset(0.0f);
+                // 新的一批还没请求过「再展开」。
+                expandRequestedCount_ = static_cast<size_t>(-1);
+            }
+            expandedStart_ = page->expanded_start;
+            expandedWords_ = page->expanded_words;
+            gridItems.reserve(expandedWords_.size());
+            for (const auto &word : expandedWords_)
+            {
+                msimeui::CandidateList::Item item;
+                item.text = word;
+                gridItems.push_back(std::move(item));
+            }
+        }
+        const bool showGrid = !gridItems.empty();
+        impl_->expandGrid->SetItems(std::move(gridItems));
+        impl_->expandContent->SetShowGrid(showGrid);
+        impl_->expandToggle->SetExpanded(expanded_);
+    }
     return page->generation;
 }
 
@@ -1266,6 +428,96 @@ void CandidatePresenter::CommitItem(size_t pageIndex)
         return;
     }
     PostMessageW(hwnd_, WM_COMMIT_CANDIDATE, static_cast<WPARAM>(pageIndex + 1), 0);
+}
+
+void CandidatePresenter::CommitExpandedItem(size_t gridIndex)
+{
+    if (!hwnd_ || gridIndex >= expandedWords_.size())
+    {
+        return;
+    }
+    // 文字随消息交给宿主窗口过程，由它释放。
+    auto *text = new (std::nothrow) std::wstring(expandedWords_[gridIndex]);
+    if (text && !PostMessageW(hwnd_, WM_COMMIT_CANDIDATE_AT,
+                              static_cast<WPARAM>(static_cast<size_t>(expandedStart_) + gridIndex),
+                              reinterpret_cast<LPARAM>(text)))
+    {
+        delete text;
+    }
+}
+
+void CandidatePresenter::SetExpanded(bool expanded)
+{
+    expanded_ = expanded;
+    Global::candidate_expand_panel_open.store(expanded, std::memory_order_release);
+    if (!expanded)
+    {
+        expandedWords_.clear();
+        expandedStart_ = 0;
+        expandRequestedCount_ = 0;
+    }
+    if (!impl_ || !impl_->expandBody)
+    {
+        return;
+    }
+    impl_->expandToggle->SetExpanded(expanded);
+    if (!expanded)
+    {
+        impl_->expandGrid->SetItems({});
+        impl_->expandContent->SetShowGrid(false);
+        impl_->expandScroller->SetScrollOffset(0.0f);
+    }
+}
+
+void CandidatePresenter::ToggleExpanded()
+{
+    if (!impl_ || !impl_->expandBody || !::is_global_wnd_cand_shown)
+    {
+        return;
+    }
+    if (expanded_)
+    {
+        SetExpanded(false);
+    }
+    else
+    {
+        SetExpanded(true);
+        // 后续候选由工作线程展开一批后随候选页一起发布过来，再刷新一次界面。
+        expandRequestedCount_ = static_cast<size_t>(-1);
+        PostMessageW(hwnd_, WM_EXPAND_CANDIDATES, 0, 0);
+    }
+    ShowFromGlobalState();
+}
+
+void CandidatePresenter::RequestMoreExpandedIfNearEnd()
+{
+    if (!expanded_ || !impl_ || !impl_->expandScroller || !hwnd_)
+    {
+        return;
+    }
+    // 滚到最后一行附近、且这一批候选还没请求过时，再要一批；工作线程展开不出新的就不会变，也就不再请求。
+    const float remaining = impl_->expandScroller->GetMaxScrollOffset() - impl_->expandScroller->GetScrollOffset();
+    if (remaining > expandRowStepDip_ * 1.5f || expandedWords_.size() == expandRequestedCount_)
+    {
+        return;
+    }
+    expandRequestedCount_ = expandedWords_.size();
+    PostMessageW(hwnd_, WM_EXPAND_CANDIDATES, 0, 0);
+}
+
+void CandidatePresenter::ScrollExpanded(short delta)
+{
+    if (!expanded_ || !impl_ || !impl_->expandScroller)
+    {
+        return;
+    }
+    // 首行与网格一起滚，一格滚一行；高精度滚轮按比例滚。滚到顶或底就停住，展开与收起只认按钮。
+    const float offset = impl_->expandScroller->GetScrollOffset();
+    impl_->expandScroller->SetScrollOffset(offset - static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA) *
+                                                        expandRowStepDip_);
+    RequestMoreExpandedIfNearEnd();
+    Present();
+    ValidateRect(hwnd_, nullptr);
 }
 
 namespace
@@ -1735,6 +987,11 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
     {
         impl_->pager->SetHoverEnabled(hoverArmed_);
     }
+    if (impl_->expandBody)
+    {
+        impl_->expandGrid->SetHoverEnabled(hoverArmed_);
+        impl_->expandToggle->SetHoverEnabled(hoverArmed_);
+    }
     // Resolve the scale once per show and thread it through measure, clamping,
     // window sizing and rendering DPI — a foreground window changing mid-show
     // must not split measure (clamped at one scale) from placement (another).
@@ -1771,6 +1028,9 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
         std::wstring stickyKey = GetPreeditWithCaretMarker();
         stickyKey += L'#';
         stickyKey += std::to_wstring(Global::candidate_ui.page_index);
+        // 展开与收起是两种尺寸，不能互相撑住。
+        if (expanded_)
+            stickyKey += L"#expanded";
         if (stickyKey != stickyCardKey_)
         {
             stickyCardKey_ = std::move(stickyKey);
@@ -1807,6 +1067,8 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
     PlaceAndShow(caret, widthDip, heightDip, cardLeftDip, cardTopDip, scale);
     ::is_global_wnd_cand_shown = true;
     Global::SetCandidateWindowRenderedVisible(true);
+    // 后续候选不够填满一屏时，不用等滚动就再要一批。
+    RequestMoreExpandedIfNearEnd();
     // PlaceAndShow presented while the host was still being placed; it is placed and shown only now.
     ScheduleAnimationFrame();
     // PlaceAndShow paints synchronously, so the page is on screen now. Echo the generation of the
@@ -1828,6 +1090,7 @@ void CandidatePresenter::Hide()
     Global::SetCandidateWindowRenderedVisible(false);
     hoverArmed_ = false;
     wheelDeltaAccumulator_ = 0;
+    SetExpanded(false);
     if (impl_ && impl_->list)
     {
         impl_->list->SetHoverEnabled(false);
@@ -1835,6 +1098,11 @@ void CandidatePresenter::Hide()
     if (impl_ && impl_->pager)
     {
         impl_->pager->SetHoverEnabled(false);
+    }
+    if (impl_ && impl_->expandBody)
+    {
+        impl_->expandGrid->SetHoverEnabled(false);
+        impl_->expandToggle->SetHoverEnabled(false);
     }
     // Cloaking keeps the swap chain's last frame. The next show presents and
     // then uncloaks, but DWM may compose the uncloaked host before it latches
@@ -1994,6 +1262,11 @@ void CandidatePresenter::ArmHoverIfPointerMoved()
     {
         impl_->pager->SetHoverEnabled(true);
     }
+    if (impl_ && impl_->expandBody)
+    {
+        impl_->expandGrid->SetHoverEnabled(true);
+        impl_->expandToggle->SetHoverEnabled(true);
+    }
 }
 
 void CandidatePresenter::NoteHoverOverItem(POINT clientPoint)
@@ -2077,7 +1350,27 @@ bool CandidatePresenter::HandleMessage(UINT message, WPARAM wParam, LPARAM lPara
         impl_->window->DispatchImportedMessage(message, wParam, lParam);
         Present();
         return true;
+    case WM_TOGGLE_CANDIDATE_EXPAND:
+        ToggleExpanded();
+        return true;
     case WM_MOUSEWHEEL: {
+        if (impl_->expandBody && expanded_)
+        {
+            // 卷轴展开皮肤展开时：滚轮上下滚动面板，不翻页，也不受「滚轮翻页」开关约束。
+            // 收起时和其他皮肤一样按下面的规则翻页。
+            wheelDeltaAccumulator_ = 0;
+            if (!::is_global_wnd_cand_shown)
+            {
+                return true;
+            }
+            if (impl_->contextMenuOpen)
+            {
+                CloseContextMenu(true);
+                return true;
+            }
+            ScrollExpanded(GET_WHEEL_DELTA_WPARAM(wParam));
+            return true;
+        }
         if (!GetConfiguredPagingMouseWheelEnabled())
         {
             // Leave the message to DefWindowProc, exactly as before the feature

@@ -10,7 +10,7 @@ bool is_alpha_vk(ImeKeyCode vk)
 }
 
 bool is_microsoft_ing_key(ImeKeyCode vk, ImeCharacter wch, const std::string &raw_input,
-                          const ShuangpinProfile &profile, bool uppercase_trigger)
+                          const ShuangpinProfile &profile, shuangpin::HelpcodeUppercaseTriggers triggers)
 {
     if (!ShuangpinProfileUsesSemicolonFinal(profile) || vk != ImeKey::Semicolon || wch != u';')
     {
@@ -18,7 +18,7 @@ bool is_microsoft_ing_key(ImeKeyCode vk, ImeCharacter wch, const std::string &ra
     }
     // 大写触发开着时大写段不算这一节的键，规则与 TSF、Server 共用。
     return FanyImeMidSentenceHelpcode::AcceptsSemicolonFinalAt(raw_input.data(), raw_input.size(), raw_input.size(),
-                                                               uppercase_trigger);
+                                                               triggers);
 }
 } // namespace
 
@@ -77,6 +77,14 @@ void ShuangpinScheme::handle_key(ImeKeyCode vk, ImeModifierMask modifiers_down, 
         return;
     }
 
+    // 末尾辅助码（间接）的段标记，宿主把触发键（反引号或分号）换成它再交过来；收不收同样由调用方判断。
+    if (wch == static_cast<ImeCharacter>(shuangpin::kEndHelpcodeMarker))
+    {
+        key_strokes_.push_back(KeyStroke{vk, modifiers_down, wch});
+        raw_input_.push_back(shuangpin::kEndHelpcodeMarker);
+        return;
+    }
+
     if (direct_helpcode_ && wch == u'/')
     {
         key_strokes_.push_back(KeyStroke{vk, modifiers_down, wch});
@@ -87,7 +95,8 @@ void ShuangpinScheme::handle_key(ImeKeyCode vk, ImeModifierMask modifiers_down, 
     const bool microsoft_ing_key =
         direct_helpcode_ ? ShuangpinProfileUsesSemicolonFinal(profile_) && wch == u';' && !raw_input_.empty() &&
                                std::isalpha(static_cast<unsigned char>(raw_input_.back()))
-                         : is_microsoft_ing_key(vk, wch, raw_input_, profile_, mid_sentence_uppercase_trigger_);
+                         : is_microsoft_ing_key(vk, wch, raw_input_, profile_,
+                                                {mid_sentence_uppercase_trigger_, end_helpcode_uppercase_trigger_});
     if (!is_alpha_vk(vk) && !microsoft_ing_key)
     {
         return;
@@ -117,17 +126,21 @@ QueryRequest ShuangpinScheme::build_request() const
     QueryRequest request;
     request.scheme = type();
     request.raw_input_with_cases = raw_input_;
-    if (shuangpin::has_mid_sentence_helpcode(raw_input_, mid_sentence_uppercase_trigger_))
+    const shuangpin::HelpcodeUppercaseTriggers triggers(mid_sentence_uppercase_trigger_,
+                                                        end_helpcode_uppercase_trigger_);
+    if (shuangpin::has_mid_sentence_helpcode(raw_input_, triggers))
     {
         // 下游只认 ' 分隔的双拼：每段（反引号段或大写段）换成分隔符，约束单独带着，原串留给宿主回读。
-        // 段的位置随请求带走，下游推进与显示不必再按当时的触发规则反推。
-        auto parsed = shuangpin::parse_mid_sentence_helpcodes(raw_input_, profile_, mid_sentence_uppercase_trigger_);
+        // 段的位置随请求带走，下游推进与显示不必再按当时的触发规则反推。末尾的末尾段直接去掉，辅码
+        // 另外带着。
+        auto parsed = shuangpin::parse_mid_sentence_helpcodes(raw_input_, profile_, triggers);
         request.raw_input_with_cases = std::move(parsed.input);
         request.raw_input_with_syllable_helpcodes = raw_input_;
         request.syllable_helpcodes = std::move(parsed.helpcodes);
         request.has_syllable_helpcode_layout = true;
         request.syllable_helpcode_source_index = std::move(parsed.source_index);
         request.syllable_helpcode_decorations = std::move(parsed.decorations);
+        request.end_helpcodes = std::move(parsed.end_helpcodes);
     }
     request.raw_input.reserve(request.raw_input_with_cases.size());
     for (const char ch : request.raw_input_with_cases)

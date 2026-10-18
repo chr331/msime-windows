@@ -267,7 +267,7 @@ ApiCredentialTest::Result TestTranslation(const ApiCredentialTest::Request &requ
         // 复用 AI 辅助当前服务商的配置，页面上没有独立的地址与密钥输入框。
         const auto config = AiTranslation::FromConfiguredTranslation(*GetConfiguredTranslation());
         if (!AiTranslation::IsUsableConfig(config))
-            return {false, "请先在 AI 辅助页面填写有效的接口地址、Token 和模型。"};
+            return {false, "请先在「AI 与云联想」页面填写有效的接口地址、Token 和模型。"};
         translated = AiTranslation::TextTranslateBatch(config, {"测试"}, "zh", "en");
     }
     else if (request.service == "translation.tencent")

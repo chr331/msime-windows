@@ -819,9 +819,22 @@ std::optional<WordItem> QuanpinDictionary::find_candidate(const std::string &key
     return WordItem(key, value, sqlite3_column_int64(stmt, 0), CandidateSource::Database, key);
 }
 
-bool QuanpinDictionary::expand_initial_candidates(const std::string &code, std::vector<WordItem> &candidates)
+bool QuanpinDictionary::can_expand_initial_candidates(const std::string &code, const std::vector<WordItem> &candidates)
 {
     if (code.size() != 1)
+    {
+        return false;
+    }
+    // 首字母候选第一次只取 24 条；正好截满才说明库里可能还有，展开过之后数目就不再是 24。
+    constexpr size_t kInitialCandidateLimit = 24;
+    return static_cast<size_t>(std::count_if(candidates.begin(), candidates.end(), [&](const WordItem &item) {
+               return item.source == CandidateSource::Database && item.pinyin == code;
+           })) == kInitialCandidateLimit;
+}
+
+bool QuanpinDictionary::expand_initial_candidates(const std::string &code, std::vector<WordItem> &candidates)
+{
+    if (!can_expand_initial_candidates(code, candidates))
     {
         return false;
     }
@@ -831,11 +844,6 @@ bool QuanpinDictionary::expand_initial_candidates(const std::string &code, std::
     };
     const size_t limited_count =
         static_cast<size_t>(std::count_if(candidates.begin(), candidates.end(), is_limited_initial));
-    constexpr size_t kInitialCandidateLimit = 24;
-    if (limited_count != kInitialCandidateLimit)
-    {
-        return false;
-    }
 
     auto expanded = query_initial(code, INT_MAX);
     if (expanded.size() <= limited_count)

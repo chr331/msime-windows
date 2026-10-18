@@ -12,6 +12,8 @@
 
 #include "../../../engine/contracts/windows_ipc.h"
 #include "../../../engine/contracts/direct_helpcode.h"
+#include "../../../engine/contracts/enumeration_comma.h"
+#include "../../../engine/contracts/mid_sentence_helpcode.h"
 #include "../../../engine/contracts/v_mode_input.h"
 #include "../../../engine/contracts/temporary_japanese_input.h"
 #include "../../../engine/contracts/trilingual_input.h"
@@ -278,6 +280,9 @@ inline std::atomic_bool SmartPunctuationDirectDigitEnabled{false};
 inline std::atomic_bool SmartPunctuationDirectLetterEnabled{false};
 // Default on until the Server sends the persisted setting.
 inline std::atomic_bool PairedPunctuationEnabled{true};
+// 中文标点下出顿号的键，FanyImeEnumerationComma::kBackslash / kSlash 的组合。Server 连上之前（以及不发这个
+// 消息的旧 Server）保持历史行为：只有 \。规则见 engine/contracts/enumeration_comma.h。
+inline std::atomic<unsigned> EnumerationCommaKeys{FanyImeEnumerationComma::kLegacyKeys};
 inline std::atomic_bool MicrosoftShuangpinEnabled{false};
 // 双拼句中辅助码开着、勾了反引号且当前是双拼：组合中的反引号按
 // engine/contracts/mid_sentence_helpcode.h 的形状规则当编码键吃掉，见 CompositionProcessorEngine_KeyClassify.cpp。
@@ -287,6 +292,10 @@ inline std::atomic_bool MidSentenceHelpcodeSemicolonEnabled{false};
 // 句中辅助码的大写触发生效：完整音节后的大写字母自己开一段。字母键照常吃，只改变反引号/分号与 ; 韵母
 // 判断时这一节怎么数（大写段不算键），规则见 engine/contracts/mid_sentence_helpcode.h。
 inline std::atomic_bool MidSentenceHelpcodeUppercaseEnabled{false};
+// 双拼末尾辅助码（间接）此刻生效的触发键，FanyImeEndHelpcode::kBacktick / kSemicolon / kUppercase 的组合。
+// 反引号、分号在输入末尾能开一段时当编码键吃掉，缓冲里记成 kEndMarker；大写位只改变 ; 韵母等判断时这一节
+// 怎么数。规则见 engine/contracts/mid_sentence_helpcode.h。
+inline std::atomic<unsigned> EndHelpcodeTriggers{0};
 // 双拼直接辅助码（万象式）开着且当前是双拼：四码后的 / 当编码键吃掉，; 韵母不再看奇偶，规则见
 // engine/contracts/direct_helpcode.h。
 inline std::atomic_bool DirectHelpcodeEnabled{false};

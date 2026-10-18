@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 # MSIME_SKINS_DIR points the same checks at another skin collection, e.g. the repository's skins/.
 SKINS_DIR = Path(os.environ.get("MSIME_SKINS_DIR", ROOT / "skins")).resolve()
-BUILTIN_SKINS = ("fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft")
+BUILTIN_SKINS = ("fluent", "wechat", "wechat_scroll", "graphite", "willow_green", "autumn_osmanthus", "microsoft")
 # Mirrors the Server catalog: community bases shared with msime, adapted onto fluent at load time.
 SHARED_BASES = ("system", "shuishan", "light", "paper", "night", "ink")
 # The full-texture base: only a base for schema_version 2 skins, never a skin of its own.
@@ -116,19 +116,31 @@ class ManifestTests(unittest.TestCase):
                         self.assertEqual(handle.lower(), accent.lower(), f"toolbar.{theme}.handle")
 
     def test_default_skin_settings(self):
-        # skins/default/<id>/skin.toml carries the built-in skins' switches; only collections that ship it are checked.
+        # skins/default/<id>/skin.toml is the factory manifest of each built-in skin and of the canvas base: the
+        # switches plus the whole look. Only collections that ship it are checked.
         default_dir = SKINS_DIR / "default"
         if not default_dir.is_dir():
             self.skipTest("No default skin settings in this collection")
         manifests = {path.parent.name: path for path in default_dir.glob("*/skin.toml")}
-        self.assertEqual(sorted(manifests), sorted(BUILTIN_SKINS))
+        self.assertEqual(sorted(manifests), sorted(BUILTIN_SKINS + (CANVAS_BASE,)))
         for skin_id, path in manifests.items():
             with self.subTest(skin=skin_id):
                 data = tomllib.loads(path.read_text(encoding="utf-8"))
                 self.assertEqual(data["schema_version"], 1)
                 self.assertEqual(data["id"], skin_id)
-                self.assertIsInstance(data.get("candidate_window", {}).get("page_arrows", True), bool)
-                self.assertIsInstance(data.get("candidate_window", {}).get("fit_content", True), bool)
+                window = data.get("candidate_window", {})
+                for switch in ("page_arrows", "fit_content", "expand_panel"):
+                    self.assertIsInstance(window.get(switch, True), bool, switch)
+                # The renderer has no built-in look left to fall back on, so every factory manifest spells out
+                # both themes, the menu and the toolbar.
+                for theme in ("dark", "light"):
+                    colors = data["candidate"][theme]
+                    for key in ("surface", "border", "text", "number", "accent", "selected", "hover"):
+                        self.assertIn(key, colors, f"candidate.{theme}.{key}")
+                    self.assertIn("menu", colors, f"candidate.{theme}.menu")
+                    self.assertIn(theme, data["toolbar"], f"toolbar.{theme}")
+                    accent = colors["accent"]
+                    self.assertEqual(data["toolbar"][theme]["handle"].lower(), accent.lower(), f"toolbar.{theme}.handle")
 
 
 if __name__ == "__main__":

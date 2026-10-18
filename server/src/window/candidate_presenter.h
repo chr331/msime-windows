@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 #include <windows.h>
 
 class CandidatePresenter
@@ -42,6 +43,12 @@ class CandidatePresenter
     void ArmHoverIfPointerMoved();
     void NoteHoverOverItem(POINT clientPoint);
     void CommitItem(size_t pageIndex);
+    // 卷轴展开面板：点选网格里的候选、切换展开、滚到底部时再要一批、滚轮。
+    void CommitExpandedItem(size_t gridIndex);
+    void SetExpanded(bool expanded);
+    void ToggleExpanded();
+    void RequestMoreExpandedIfNearEnd();
+    void ScrollExpanded(short delta);
     void ShowItemContextMenu(size_t pageIndex, POINT clientPoint);
     void CloseContextMenu(bool restoreHost);
     void OpenFixSubmenu();
@@ -64,8 +71,6 @@ class CandidatePresenter
     POINT hoverBaseline_{};
     // 已为哪一页报过「指针停在候选上」，同一页只报一次。
     std::uint64_t hoverNotedGeneration_ = 0;
-    float decorationTopDip_ = 0.0f;
-    float decorationWidthDip_ = 0.0f;
     // 卡片最小宽度：默认 160，外部皮肤的 min_width_dip 与装饰图宽度可以把它撑大，
     // 装饰图因此始终落在卡片宽度之内。
     float cardMinWidthDip_ = 160.0f;
@@ -91,4 +96,13 @@ class CandidatePresenter
     float stickyCardWidthDip_ = 0.0f;
     float stickyCardHeightDip_ = 0.0f;
     int wheelDeltaAccumulator_ = 0;
+    // 卷轴展开面板的界面状态。展开与收起只认展开按钮，继续输入时保持；候选窗关闭时收起。
+    bool expanded_ = false;
+    // 网格里显示的后续候选，取自最近一次画出来的候选页；expandedStart_ 是第一个的绝对下标。
+    int expandedStart_ = 0;
+    std::vector<std::wstring> expandedWords_;
+    // 上一次请求再展开时网格里有多少个候选，同一批不重复请求。
+    size_t expandRequestedCount_ = 0;
+    int expandRows_ = 4;
+    float expandRowStepDip_ = 30.0f;
 };

@@ -84,7 +84,8 @@ class ModelList : public msimeui::Visual
     {
         // 6 rows visible (border box 182px).
         const float visible = 6.0f * 28.0f + 5.0f * 2.0f + 2.0f * 2.0f - 2.0f;
-        return {availableSize.width, std::min(ContentHeight(), visible)};
+        // No intrinsic width: the popup matches the combobox (max of this and the anchor).
+        return {0.0f, std::min(ContentHeight(), visible)};
     }
 
     void Arrange(const RectF &finalRect) override
@@ -633,11 +634,12 @@ struct AiPage : std::enable_shared_from_this<AiPage>
 
     VisualPtr Build()
     {
-        PageBuilder page(L"AI 辅助");
+        PageBuilder page(L"AI 与云联想");
         std::weak_ptr<AiPage> weak = shared_from_this();
 
         page.AddSection(MakeRows({MakeRow(L"启用 AI 联想", L"异步生成候选；Jev 从已有候选中选择并标记推荐项",
-                                          BindToggle(context, "ai_assistant.enabled"))}));
+                                          BindToggle(context, "ai_assistant.enabled")),
+                                  MakeRow(L"启用云联想", L"", BindToggle(context, "general.cloud_candidates"))}));
 
         // API 配置
         {

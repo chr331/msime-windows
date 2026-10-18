@@ -45,6 +45,8 @@ struct CandidateColors
     std::string menuBorder;
     std::string menuText;
     std::string menuHover;
+    // 横排三角翻页箭头前面那条分隔线（page_arrow_style = "triangle" 时才画）；留空不画。
+    std::string pageArrowDivider;
     // candidate_window.backdrop 不是 none 时的材质参数，0–1。backdrop_opacity 是 surface 色调盖在材质上的不透明度，
     // 不写时取 surface 自带的 alpha；backdrop_luminosity 是亮度层的不透明度，越高越不受后面画面明暗影响，
     // 不写时亚克力取 0.85、云母取 1。
@@ -88,6 +90,50 @@ struct InsetsDip
     double right = 0.0;
     double bottom = 0.0;
     double left = 0.0;
+};
+
+// 候选框里的一段长度：清单里写 DIP 数值，或写成 "0.3em" 按候选字号缩放（四舍五入到整 DIP）。
+struct Length
+{
+    double value = 0.0;
+    bool em = false;
+};
+float ResolveLength(const Length &length, float fontSize);
+
+// 候选框的版式。[candidate_window] 里写的对两种排列都生效，[candidate_window.horizontal] /
+// [candidate_window.vertical] 里写的只对那一种生效、并且优先。没写的项沿用 base，再没有就用渲染器的缺省值。
+struct CandidateGeometry
+{
+    // 卡片内边距
+    std::optional<Length> padding;
+    // 候选项之间的空隙
+    std::optional<Length> itemGap;
+    // 候选项比 1.35 倍字号多出的高度，上下各一半
+    std::optional<Length> itemExtraHeight;
+    // 高亮左缘到序号左端的距离（不小于 5）
+    std::optional<Length> numberInset;
+    // 候选文字后面的留白
+    std::optional<Length> itemPaddingRight;
+    // 横排每项的最小宽度，0 为不限
+    std::optional<Length> itemMinWidth;
+    // 序号与候选之间的空
+    std::optional<Length> numberGap;
+    // 序号字号相对候选字号的比例
+    std::optional<double> numberScale;
+    // 选中竖条的宽度与高度（高度以字号的倍数计），以及是否落在高亮左缘之内
+    std::optional<Length> selectedBarWidth;
+    std::optional<double> selectedBarHeightEm;
+    std::optional<bool> selectedBarInside;
+    // 落在卡片四角上的高亮角跟卡片同一圆角
+    std::optional<bool> itemCornersFollowCard;
+    // 横排时把卡片多出的宽度均分给同一行各项，高亮铺满到卡片右边
+    std::optional<bool> justifyRows;
+    // 隐藏预编辑行时抵掉它与候选之间的 2 DIP 行距
+    std::optional<bool> trimHiddenPreeditGap;
+    // 翻页箭头样式：chevron（折线）/ triangle（实心三角，横排前面隔一条分隔线）；为空沿用 base
+    std::string pageArrowStyle;
+    // 预编辑行的外边距（上右下左 DIP）
+    std::optional<InsetsDip> preeditMarginDip;
 };
 
 // 挂件 z_index 低于它的画在面板（卡片）之下，其余画在面板之上。面板自身相当于 z_index = 1，
@@ -154,10 +200,20 @@ struct Package
     // 卡片严格按候选文字所需的宽度收紧，不再垫出厂最小宽度、也不在同一输入里只增不减；
     // min_width_dip 与装饰图宽度仍然生效。未设置时沿用 base 默认皮肤的设置（见 ResolveFitContent）。
     std::optional<bool> fitContent;
+    // 卷轴展开：横排候选行右端放一个展开按钮，点开后在候选行下面展开后续候选的网格，右侧细滚动条，
+    // 滚轮上下滚动而不是翻页。未设置时沿用 base 默认皮肤的设置（见 ResolveExpandPanel）。
+    std::optional<bool> expandPanel;
+    // 展开后网格一屏显示的行数（2–8）；未设置时为 kDefaultExpandRows。
+    std::optional<int> expandRows;
     CandidateColors dark;
     CandidateColors light;
-    // 覆盖基础皮肤的悬浮工具栏外框圆角；未设置时沿用基础皮肤。
+    // 候选框版式：两种排列共用的，以及只对横排 / 竖排生效的。
+    CandidateGeometry geometry;
+    CandidateGeometry horizontalGeometry;
+    CandidateGeometry verticalGeometry;
+    // 覆盖基础皮肤的悬浮工具栏外框圆角与图标悬停底色的圆角；未设置时沿用基础皮肤。
     std::optional<double> toolbarCornerRadiusDip;
+    std::optional<double> toolbarIconCornerRadiusDip;
     ToolbarColors toolbarDark;
     ToolbarColors toolbarLight;
     // v2 专有特性：九宫格贴图边框
@@ -185,14 +241,18 @@ struct ScanResult
     std::vector<Issue> issues;
 };
 
-// 内置皮肤的设置清单：<skinsRoot>/default/<id>/skin.toml。外观仍由内置的 D2D 配色决定，
-// 清单只承载皮肤级的开关；外部皮肤没写的开关沿用它 base 的这份清单。
+// 内置皮肤的清单：<skinsRoot>/default/<id>/skin.toml，同时承载皮肤级的开关与完整外观。出厂清单编进程序，
+// 安装时整份覆盖数据目录里的那一份；数据目录里的清单写了的键覆盖出厂值（技术上能改，但不建议，升级会冲掉）。
+// 外部皮肤没写的开关与外观都沿用它 base 的这份清单。
 struct DefaultSkin
 {
     std::string id;
     std::string name;
+    // 设置页皮肤卡片上的一句说明。
+    std::string description;
     std::optional<bool> pageArrows;
     std::optional<bool> fitContent;
+    std::optional<bool> expandPanel;
 };
 
 // 默认皮肤清单所在的子目录名，Scan 跳过它，外部皮肤也不能占用这个 ID。
@@ -201,6 +261,12 @@ inline constexpr const char *kDefaultSkinsFolder = "default";
 inline constexpr bool kDefaultPageArrows = false;
 // 默认皮肤清单缺失或没写 fit_content 时的取值：卡片保留出厂最小宽度。
 inline constexpr bool kDefaultFitContent = false;
+// 默认皮肤清单缺失或没写 expand_panel 时的取值：用翻页而不是卷轴展开。
+inline constexpr bool kDefaultExpandPanel = false;
+// 卷轴展开后一屏的网格行数，及皮肤可写的范围。
+inline constexpr int kDefaultExpandRows = 4;
+inline constexpr int kMinExpandRows = 2;
+inline constexpr int kMaxExpandRows = 8;
 
 // 全贴图基底：透明面板、无描边、无圆角、无阴影，外观完全来自九宫格面板图与挂件，是 v2 与自定义皮肤的地基。
 // 它只能作为外部皮肤的 base，不能单独选用（没有贴图时什么也看不见），也不在 BuiltInIds 里。
@@ -212,7 +278,7 @@ bool IsAnimatableImagePath(const std::string &path);
 // 指定主题下实际要画的面板图：浅色主题优先 light_source，没写就用 source。
 const std::string &BorderImageSource(const BorderImage &borderImage, bool light);
 
-// 六个内置皮肤的 ID，按设置页的展示顺序。
+// 内置皮肤的 ID，按设置页的展示顺序。每个都有 skins/default/<id>/skin.toml 出厂清单。
 const std::vector<std::string> &BuiltInIds();
 bool IsBuiltIn(const std::string &id);
 // 官方贴图皮肤：本身是 skins\<id> 下的外部皮肤包，随安装包装到数据目录、照外部皮肤加载和渲染，
@@ -238,4 +304,16 @@ std::optional<DefaultSkin> LoadDefault(const std::filesystem::path &skinsRoot, c
 bool ResolvePageArrows(const std::filesystem::path &skinsRoot, const std::string &skinId, const Package *package);
 // fit_content 的解析顺序同 ResolvePageArrows。
 bool ResolveFitContent(const std::filesystem::path &skinsRoot, const std::string &skinId, const Package *package);
+// expand_panel 的解析顺序同 ResolvePageArrows。
+bool ResolveExpandPanel(const std::filesystem::path &skinsRoot, const std::string &skinId, const Package *package);
+
+// 有出厂清单的基底：六个内置皮肤与 canvas。
+bool HasFactoryLook(const std::string &id);
+// 编进程序的出厂清单解析出的外观（候选配色、版式、工具栏）。没有出厂清单的 id 用 fluent 的。
+const Package &FactoryLook(const std::string &id);
+// 实际生效的内置外观：出厂外观上叠加数据目录 skins/default/<id>/skin.toml 里写了的键；
+// 那份清单缺失或读不出来时就是出厂外观。没有出厂清单的 id 用 fluent 的。
+Package ResolveBuiltInLook(const std::filesystem::path &skinsRoot, const std::string &id);
+// 内置皮肤的名称与说明（设置页用）：数据目录里的清单写了就用它的，否则用出厂清单的。
+DefaultSkin ResolveBuiltInInfo(const std::filesystem::path &skinsRoot, const std::string &id);
 } // namespace CandidateSkinCatalog

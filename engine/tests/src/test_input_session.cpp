@@ -3021,6 +3021,102 @@ int run_test()
                     "The semicolon final was rejected after an uppercase helpcode block.");
         }
 
+        // 双拼末尾辅助码关掉直接触发：辅码改由引导键（输入串里的 |，宿主把反引号或分号换成它）或大写字母
+        // 引出，一码按首末字重排、两码按首末字筛选（lantian 夹具：你=ab、拟=cd、好=ef）。
+        {
+            const auto has_word = [](const metasequoia::InputSession &target, const std::string &word) {
+                const auto &items = target.candidates();
+                return std::any_of(items.begin(), items.end(), [&](const WordItem &item) { return item.word == word; });
+            };
+            const auto indirect_session = [](bool uppercase, const ShuangpinProfile &profile) {
+                auto session = std::make_unique<metasequoia::InputSession>(SchemeType::Shuangpin, profile,
+                                                                           metasequoia::RuntimePaths::legacy());
+                session->set_shuangpin_helpcode_enabled(true);
+                session->set_shuangpin_helpcode_triggers(false, uppercase);
+                require(session->set_helpcode_schema("lantian"), "The Lantian helpcode fixture was not selected.");
+                return session;
+            };
+
+            // 关着直接触发：完整音节后多出来的键不再当单码。
+            auto plain_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            type(*plain_session, "nihcc");
+            require(!plain_session->has_active_helpcode(),
+                    "A trailing letter was read as a helpcode while the end helpcode was indirect.");
+
+            auto single_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            auto &single = *single_session;
+            type(single, "n");
+            require(!single.handle_character('|').handled && single.preedit() == "n",
+                    "An end helpcode marker was accepted after an incomplete shuangpin syllable.");
+            type(single, "ihc");
+            require(single.handle_character('|').handled && single.preedit() == "nihc|",
+                    "The end helpcode marker was not accepted after complete syllables.");
+            require(!single.handle_character('|').handled, "A second end helpcode marker was accepted.");
+            type(single, "c");
+            require(single.get_pinyin_sequence_with_cases() == "nihc|c" && single.get_pinyin_sequence() == "nihc" &&
+                        single.has_active_helpcode(),
+                    "The end helpcode block was not kept apart from the pinyin.");
+            require(single.get_pinyin_segmentation_with_cases() == "ni'hc|c",
+                    "The end helpcode block was not shown after the last syllable.");
+            require(single.segment_raw_boundaries() == std::vector<std::size_t>({0, 2, 4, 6}),
+                    "The end helpcode block was not a unit of its own.");
+            require(!single.candidates().empty() && single.candidates().front().word == "拟好" &&
+                        has_word(single, "你好"),
+                    "A single indirect end helpcode did not reorder candidates by their first character.");
+
+            auto double_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            type(*double_session, "nihc|cE");
+            require(has_word(*double_session, "拟好") && !has_word(*double_session, "你好"),
+                    "Two indirect end helpcodes did not filter by the first and last characters.");
+
+            // 引导键只在输入末尾收：光标移回句中时仍按标点处理。
+            auto caret_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            type(*caret_session, "nihc");
+            require(caret_session->handle_command(metasequoia::Command::MoveLeft).handled &&
+                        caret_session->handle_command(metasequoia::Command::MoveLeft).handled &&
+                        !caret_session->handle_character('|').handled && caret_session->preedit() == "nihc",
+                    "An end helpcode marker was accepted in the middle of the composition.");
+
+            // 选掉前面的词，末尾段随剩余部分留下来；退格先删辅码。
+            auto carried_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            auto &carried = *carried_session;
+            type(carried, "nihcbuhc|x");
+            require(has_word(carried, "你好"), "A single end helpcode filtered a shorter candidate away.");
+            const auto committed = carried.select_candidate(candidate_index(carried, "你好"));
+            require(committed.commit == "你好" && carried.preedit() == "buhc|x" && carried.has_active_helpcode(),
+                    "Selecting a prefix dropped the end helpcode block of the remaining syllables.");
+            require(carried.handle_command(metasequoia::Command::Backspace).handled && carried.preedit() == "buhc|" &&
+                        !carried.has_active_helpcode(),
+                    "Backspace did not remove the end helpcode letter.");
+
+            // 大写触发：完整音节后的大写字母开一段末尾段，第二码大小写都算。
+            auto upper_session = indirect_session(true, GetXiaoheShuangpinProfile());
+            auto &upper = *upper_session;
+            type(upper, "nihcCe");
+            require(upper.get_pinyin_sequence() == "nihc" && upper.get_pinyin_segmentation_with_cases() == "ni'hcCe",
+                    "An uppercase letter after complete syllables did not open an end helpcode block.");
+            require(has_word(upper, "拟好") && !has_word(upper, "你好"),
+                    "An uppercase end helpcode block did not filter candidates.");
+
+            // 微软双拼：末尾段后面的 ; 不是韵母。
+            auto microsoft_session = indirect_session(false, GetMicrosoftShuangpinProfile());
+            type(*microsoft_session, "nihk|ce");
+            require(!microsoft_session->handle_character(';').handled && microsoft_session->preedit() == "nihk|ce",
+                    "A semicolon after an end helpcode block was taken as the ing final.");
+
+            // 直接触发开着、或直接辅助码（万象式）接管辅码时，引导键不收。
+            auto direct_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            direct_session->set_shuangpin_helpcode_triggers(true, false);
+            type(*direct_session, "nihc");
+            require(!direct_session->handle_character('|').handled,
+                    "An end helpcode marker was accepted while the end helpcode was direct.");
+            auto wanxiang_session = indirect_session(false, GetXiaoheShuangpinProfile());
+            wanxiang_session->set_direct_helpcode_enabled(true);
+            type(*wanxiang_session, "nihc");
+            require(!wanxiang_session->handle_character('|').handled,
+                    "An end helpcode marker was accepted while the direct helpcode took over.");
+        }
+
         require(!session.handle_character('1').handled, "A digit was swallowed instead of passed through.");
         require(!session.handle_command(metasequoia::Command::Backspace).handled,
                 "Backspace was swallowed while no composition was active.");

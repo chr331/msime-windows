@@ -243,8 +243,8 @@ if (Test-Path -LiteralPath $targetAssets) {
 }
 Copy-DirectoryContents -Source $settingsAssets -Destination $targetSettingsAssets
 
-# 内置皮肤的设置清单（翻页箭头等开关）。用户会就地改这些 skin.toml，安装脚本用
-# onlyifdoesntexist 落到数据目录的 skins\default，升级只补缺失的文件、不覆盖已有的。
+# 内置皮肤的出厂清单（开关与完整外观，含 canvas 基底）。安装脚本每次都整份覆盖到数据目录的
+# skins\default，用户在那里的改动升级后不保留。
 # 不放进 app_data：app_data 的顶层条目都在卸载时按 IsShippedAppDataItem 删除，而 skins
 # 整个目录归用户（外部皮肤也在里面），不能进那份名单。
 $targetDefaultSkins = Join-Path $PSScriptRoot 'default_skins'

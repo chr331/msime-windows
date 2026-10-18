@@ -261,7 +261,7 @@ VisualPtr BuildFloatingToolbarPage(PageContext &context)
                      options);
 
         const bool candLight = skinpreview::ResolveSurfaceLight(*model, "appearance.theme_cand");
-        caret->Set(skinpreview::ResolveCandidateLook(*model, skin, candLight, false, 16.0f),
+        caret->Set(skinpreview::ResolveCandidateLook(*model, skin, candLight),
                    model->GetString("general.caret_state_indicator_position", "top-left"),
                    ParseTextOverride(model->GetString("appearance.cand_text_color", "auto")));
     };

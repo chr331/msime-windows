@@ -588,16 +588,17 @@ void FloatingToolbarPresenter::ApplyTheme()
     // 跟随候选窗皮肤，外部皮肤用其 base，再叠上 [toolbar] 的覆盖。
     // 皮肤在当前候选布局/主题下不生效时整份不套用，与候选窗同一条判定。
     const std::string skinId = GetConfiguredCandidateSkin();
+    const std::filesystem::path skinsRoot = std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins";
     std::optional<CandidateSkinCatalog::Package> package;
     std::string baseSkinId = skinId;
     if (!CandidateSkinCatalog::IsBuiltIn(skinId))
     {
-        package = CandidateSkinCatalog::LoadSupported(
-            std::filesystem::path(CommonUtils::get_ime_data_path_w()) / L"skins", skinId,
-            GetConfiguredCandidateWindowLayout(), ResolveConfiguredTheme(GetConfiguredThemeCand()));
+        package = CandidateSkinCatalog::LoadSupported(skinsRoot, skinId, GetConfiguredCandidateWindowLayout(),
+                                                      ResolveConfiguredTheme(GetConfiguredThemeCand()));
         baseSkinId = package ? package->base : "fluent";
     }
-    FloatingToolbarSkin skin = ResolveFloatingToolbarSkin(baseSkinId, light);
+    FloatingToolbarSkin skin =
+        ResolveFloatingToolbarSkin(CandidateSkinCatalog::ResolveBuiltInLook(skinsRoot, baseSkinId), light);
     if (package)
     {
         ApplyFloatingToolbarSkinOverrides(skin, *package, light);
