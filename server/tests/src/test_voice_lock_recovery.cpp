@@ -42,6 +42,46 @@ using std::chrono::milliseconds;
 // control thread is parked.
 std::thread::id g_test_thread_id;
 
+// A test-only checkpoint in the real control loop parks the worker before it
+// takes a request. Idle epochs also prove the whole queue has been processed,
+// without a sleep or changing the enabled configuration to mask a stale Start.
+std::mutex g_queue_gate_mutex;
+std::condition_variable g_queue_gate_cv;
+bool g_pause_queue = false;
+bool g_queue_paused = false;
+unsigned g_queue_idle_epoch = 0;
+
+void PauseNextIdleQueue()
+{
+    std::lock_guard<std::mutex> lock(g_queue_gate_mutex);
+    g_pause_queue = true;
+}
+
+bool WaitQueuePaused()
+{
+    std::unique_lock<std::mutex> lock(g_queue_gate_mutex);
+    return g_queue_gate_cv.wait_for(lock, std::chrono::seconds(5), [] { return g_queue_paused; });
+}
+
+void ReleaseQueue()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_queue_gate_mutex);
+        g_pause_queue = false;
+    }
+    g_queue_gate_cv.notify_all();
+}
+
+bool ReleaseQueueAndWaitIdle()
+{
+    std::unique_lock<std::mutex> lock(g_queue_gate_mutex);
+    const unsigned previous = g_queue_idle_epoch;
+    g_pause_queue = false;
+    g_queue_gate_cv.notify_all();
+    return g_queue_gate_cv.wait_for(lock, std::chrono::seconds(5),
+                                    [previous] { return g_queue_idle_epoch > previous; });
+}
+
 std::mutex g_effect_mutex;
 std::condition_variable g_effect_cv;
 std::atomic<bool> g_actions_visible{false};
@@ -523,6 +563,7 @@ struct ServiceFixture
         // Release every gate before Shutdown: an assertion can fail while the
         // control thread is in the config or capture gate and while the ASR
         // worker is parked in Finish.
+        ReleaseQueue();
         {
             std::lock_guard<std::mutex> lock(g_config_mutex);
             g_block_next_config_read = false;
@@ -556,7 +597,71 @@ struct ServiceFixture
   private:
     bool cancel_on_teardown_ = true;
 };
+
+enum class QueuedStartEnd
+{
+    Stop,
+    Cancel,
+    ImeReactivation
+};
+
+void VerifyQueuedLockedStartIsRetired(QueuedStartEnd action)
+{
+    ServiceFixture fixture;
+    PreparePendingAsr();
+
+    // Park on the next idle checkpoint after a disabled sentinel Start. The
+    // earlier ASR stays blocked in Finish throughout the queued-start race.
+    REQUIRE(QueueDisabledStartBarrier());
+    PauseNextIdleQueue();
+    ReleaseConfigRead();
+    REQUIRE(WaitQueuePaused());
+    SetConfig(TestDoubaoConfig(true, true));
+    ResetCapture();
+    AllowCaptureStart(); // A broken build must report an attempt, not hang.
+
+    BeginGesture(Gesture::RAlt);
+    PressSpace();
+    EndGesture(Gesture::RAlt); // Pending lock suppresses a hold-release Stop.
+    PumpMessages();            // Start -> Lock, both still waiting for the control thread.
+    switch (action)
+    {
+    case QueuedStartEnd::Stop:
+        VoiceInput::StopRecording();
+        break;
+    case QueuedStartEnd::Cancel:
+        VoiceInput::CancelRecording();
+        break;
+    case QueuedStartEnd::ImeReactivation:
+        VoiceInput::SetImeActive(false);
+        VoiceInput::SetImeActive(true);
+        break;
+    }
+
+    REQUIRE(ReleaseQueueAndWaitIdle());
+    REQUIRE(!CaptureEntered());
+    REQUIRE(!VoiceInput::IsRecording());
+    ReleaseDoubaoFinish();
+    REQUIRE(WaitForInsertText());
+    REQUIRE_EQ(InsertedText(), std::wstring(kFixedAsrText));
+    VerifyNextHoldStartsAndStops();
+}
 } // namespace
+
+TEST_CASE(queued_start_lock_stop_retires_start_and_preserves_asr)
+{
+    VerifyQueuedLockedStartIsRetired(QueuedStartEnd::Stop);
+}
+
+TEST_CASE(queued_start_lock_cancel_retires_start_and_preserves_asr)
+{
+    VerifyQueuedLockedStartIsRetired(QueuedStartEnd::Cancel);
+}
+
+TEST_CASE(queued_start_lock_ime_reactivation_retires_start_and_preserves_asr)
+{
+    VerifyQueuedLockedStartIsRetired(QueuedStartEnd::ImeReactivation);
+}
 
 // Start is still initializing when Space requests the lock and the hold
 // shortcut is released. The start must commit, and the next hold must choose
@@ -1221,6 +1326,21 @@ void Write(const std::wstring &)
 
 namespace VoiceInput
 {
+namespace Detail
+{
+void ControlQueueCheckpoint(bool idle)
+{
+    std::unique_lock<std::mutex> lock(g_queue_gate_mutex);
+    if (!idle)
+        return;
+    ++g_queue_idle_epoch;
+    g_queue_paused = g_pause_queue;
+    g_queue_gate_cv.notify_all();
+    g_queue_gate_cv.wait(lock, [] { return !g_pause_queue; });
+    g_queue_paused = false;
+}
+} // namespace Detail
+
 void MuteOtherSystemAudio()
 {
 }

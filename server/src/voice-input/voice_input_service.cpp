@@ -36,6 +36,13 @@
 #include <thread>
 #include <vector>
 
+#ifdef MSIME_VOICE_CONTROL_TEST
+namespace VoiceInput::Detail
+{
+void ControlQueueCheckpoint(bool idle);
+}
+#endif
+
 namespace
 {
 constexpr unsigned kSampleRate = 16000;
@@ -201,12 +208,13 @@ void EnqueueControlCommand(ControlCommand command, std::uintptr_t lock_ticket = 
         {
             if (g_starting)
                 g_abort_start = true;
-            bool removed_start = false;
-            if (!g_control_commands.empty() && g_control_commands.back().command == ControlCommand::Start)
-            {
-                g_control_commands.pop_back();
-                removed_start = true;
-            }
+            // A pending Lock may follow Start, so the tail alone cannot tell
+            // whether a cancelled startup is still waiting in the queue.
+            const auto first_removed =
+                std::remove_if(g_control_commands.begin(), g_control_commands.end(),
+                               [](const ControlRequest &request) { return request.command == ControlCommand::Start; });
+            const bool removed_start = first_removed != g_control_commands.end();
+            g_control_commands.erase(first_removed, g_control_commands.end());
             if (removed_start && !g_recording && !g_starting)
                 g_abort_start = false;
             if (!g_recording && !g_starting)
@@ -247,6 +255,16 @@ void ControlLoop()
 {
     for (;;)
     {
+#ifdef MSIME_VOICE_CONTROL_TEST
+        // The test gate runs outside the queue mutex so hook messages and
+        // Stop/Cancel can enqueue while the worker is parked before dequeue.
+        bool idle;
+        {
+            std::lock_guard<std::mutex> lock(g_control_mutex);
+            idle = g_control_commands.empty();
+        }
+        VoiceInput::Detail::ControlQueueCheckpoint(idle);
+#endif
         ControlRequest request;
         bool starts_recording = false;
         {
