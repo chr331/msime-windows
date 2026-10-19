@@ -16,9 +16,12 @@
 #include "cue_player.h"
 #include "voice_target.h"
 #include "voice_result_card.h"
+#include "voice_result_router.h"
+#include "voice_clipboard.h"
 #include "voice_commit_policy.h"
 #include "voice_control_policy.h"
 #include "voice_input_delivery.h"
+#include "voice_delivery_owner.h"
 
 #include "utils/network_proxy.h"
 #include <curl/curl.h>
@@ -58,11 +61,11 @@ std::mutex g_send_mutex;
 std::atomic<bool> g_stream_inline_this_session{false};
 // Inline composition owner route for the current session; guarded by g_send_mutex.
 VoiceInput::Target g_inline_owner;
-// Session that bound g_inline_owner; guarded by g_send_mutex. It keeps a
-// cancellation from reaching a composition another session bound while the
-// cancellation's UIA capture ran outside the lock.
+// Session that bound g_inline_owner; guarded by g_send_mutex. Exact delivery
+// ownership keeps cancellation from reaching another session.
 std::uint64_t g_inline_owner_session = 0;
-std::wstring g_last_inline_preedit;
+std::shared_ptr<VoiceInput::VoiceDeliveryOwner> g_inline_delivery;
+std::vector<std::shared_ptr<VoiceInput::VoiceDeliveryOwner>> g_pending_voice_cancels;
 std::thread g_control_thread;
 std::mutex g_control_mutex;
 std::condition_variable g_control_cv;
@@ -77,6 +80,13 @@ std::atomic<bool> g_ime_active{false};
 bool g_initialized = false;
 WaveOverlay g_overlay;
 VoiceResultCard g_result_card;
+std::atomic<bool> g_result_card_available{false};
+// Complete retained transcript for the current retained-result generation. This mutex never nests
+// with g_send_mutex in the opposite order: UI copy callbacks take only this lock, briefly copy the
+// full value, release it, and only then touch the clipboard.
+std::mutex g_retained_result_mutex;
+std::uint64_t g_retained_result_session = 0;
+std::wstring g_retained_result_text;
 CuePlayer g_cue_player;
 HHOOK g_keyboard_hook = nullptr;
 HWND g_message_window = nullptr;
@@ -104,6 +114,37 @@ constexpr UINT kToggleRecordingMessage = WM_APP + 183;
 constexpr UINT kLockRecordingMessage = WM_APP + 184;
 constexpr UINT kCancelRecordingMessage = WM_APP + 185;
 constexpr wchar_t kMessageWindowClass[] = L"MetasequoiaImeVoiceInputMessageWindow";
+
+void ClearRetainedResult()
+{
+    std::lock_guard<std::mutex> lock(g_retained_result_mutex);
+    g_retained_result_session = 0;
+    g_retained_result_text.clear();
+}
+
+void StoreRetainedResult(std::uint64_t session, const std::wstring &text)
+{
+    if (session == 0 || text.empty())
+        return;
+    std::lock_guard<std::mutex> lock(g_retained_result_mutex);
+    g_retained_result_session = session;
+    g_retained_result_text = text;
+}
+
+bool CopyRetainedResultToClipboard(HWND owner, std::uint64_t session, const std::wstring &visible_text)
+{
+    std::wstring complete_text;
+    {
+        std::lock_guard<std::mutex> lock(g_retained_result_mutex);
+        if (session == 0 || g_retained_result_session != session || g_retained_result_text.empty() ||
+            g_retained_result_text != visible_text)
+            return false;
+        complete_text = g_retained_result_text;
+    }
+    // The service owns the authoritative full result; the recovery surface only shows a preview.
+    // The lock is not held across the clipboard call or any window operation.
+    return VoiceInput::CopyUnicodeTextToClipboard(owner, complete_text);
+}
 
 std::wstring ResolveCuePath(const wchar_t *filename)
 {
@@ -661,56 +702,32 @@ std::string Polish(const std::string &text, const VoiceInputConfig &config)
 // field.
 std::size_t SendTextViaSendInput(const std::wstring &text)
 {
-    return VoiceInput::SendUnicodeTextWith(text, [](wchar_t ch) -> UINT {
-        INPUT input[2]{};
-        input[0].type = INPUT_KEYBOARD;
-        input[0].ki.wScan = ch;
-        input[0].ki.dwFlags = KEYEVENTF_UNICODE;
-        input[1] = input[0];
-        input[1].ki.dwFlags |= KEYEVENTF_KEYUP;
-        return SendInput(2, input, sizeof(INPUT));
-    });
-}
-
-bool CopyUnicodeTextToClipboard(const std::wstring &text)
-{
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory)
-    {
-        return false;
-    }
-    void *destination = GlobalLock(memory);
-    if (!destination)
-    {
-        GlobalFree(memory);
-        return false;
-    }
-    memcpy(destination, text.c_str(), bytes);
-    GlobalUnlock(memory);
-
-    // Allocate and fill before touching the shared clipboard. Open/Empty can
-    // still fail, but no previous clipboard content is cleared merely because
-    // allocation or locking failed.
-    if (!OpenClipboard(nullptr))
-    {
-        GlobalFree(memory);
-        return false;
-    }
-    if (!EmptyClipboard())
-    {
-        CloseClipboard();
-        GlobalFree(memory);
-        return false;
-    }
-    if (!SetClipboardData(CF_UNICODETEXT, memory))
-    {
-        GlobalFree(memory);
-        CloseClipboard();
-        return false;
-    }
-    CloseClipboard();
-    return true;
+    return VoiceInput::SendUnicodeTextWith(
+        text,
+        [](wchar_t ch) -> UINT {
+            INPUT input[2]{};
+            input[0].type = INPUT_KEYBOARD;
+            input[0].ki.wScan = ch;
+            input[0].ki.dwFlags = KEYEVENTF_UNICODE;
+            input[1] = input[0];
+            input[1].ki.dwFlags |= KEYEVENTF_KEYUP;
+            return SendInput(2, input, sizeof(INPUT));
+        },
+        [](wchar_t ch) -> UINT {
+            // A partial Unicode pair leaves the key-down in the input stream.
+            // Release exactly that UTF-16 unit; never retry or continue the
+            // text, and never report this cleanup as a delivered character.
+            INPUT input{};
+            input.type = INPUT_KEYBOARD;
+            input.ki.wScan = ch;
+            input.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+            const UINT injected = SendInput(1, &input, sizeof(INPUT));
+            if (injected != 1)
+            {
+                DIAG_LOGF(L"voice: sendinput unicode cleanup failed (expected=1, actual={})", injected);
+            }
+            return injected;
+        });
 }
 
 // Immediate, no-COM route check used inside the send lock right before
@@ -792,7 +809,7 @@ bool CommitCtrlVViaClipboard(const std::wstring &text, const VoiceInput::Target 
     {
         return false;
     }
-    if (!CopyUnicodeTextToClipboard(text))
+    if (!VoiceInput::CopyUnicodeTextToClipboard(nullptr, text))
     {
         return FastVerifiedSendInput(text, target);
     }
@@ -912,153 +929,79 @@ bool OwnerRouteValid(const VoiceInput::Target &owner)
     return VoiceInput::IsTargetCurrentFast(owner) && IsPipeRouteCurrent(owner);
 }
 
-// Voice-composition messages only ever go to the bound owner route after a
-// final fast+route re-check, so a stale owner is never deliberately addressed.
-// The check and the pipe write are not one cross-process transaction; a focus
-// change in that window can still race the delivery.
-bool SendVoiceCompositionToOwner(const VoiceInput::Target &owner, UINT msg_type, const std::wstring &text)
+// Snapshot under the session lock, then do bounded pipe I/O under the owner's
+// own lock. A final seals this same owner, so a late preview cannot follow it.
+void PushInlinePreedit(const std::wstring &text, std::uint64_t session)
 {
-    if (owner.client == 0 || owner.epoch == 0 || !OwnerRouteValid(owner))
+    std::shared_ptr<VoiceInput::VoiceDeliveryOwner> delivery;
+    VoiceInput::Target target;
     {
-        return false;
+        std::lock_guard<std::mutex> lock(g_send_mutex);
+        if (g_voice_session != session || !g_stream_inline_this_session || !g_recording ||
+            g_inline_owner_session != session)
+            return;
+        delivery = g_inline_delivery;
+        target = g_inline_owner;
     }
-    if (msg_type == Global::DataFromServerMsgTypeToTsfWorkerThread::CancelVoiceComposition)
-    {
-        return SendToTsfWorkerThreadClientViaNamedpipe(owner.client, owner.epoch, msg_type, L"");
-    }
-    return SendVoiceCompositionToTsfWorker(owner.client, owner.epoch, msg_type, text);
+    if (delivery && OwnerRouteValid(target))
+        delivery->Preview(text);
 }
 
-void PushInlinePreedit(const std::wstring &text)
+// Called only on control/network threads, after releasing g_send_mutex.
+void FlushVoiceCancels()
 {
-    if (!g_stream_inline_this_session.load() || !g_recording.load())
+    std::vector<std::shared_ptr<VoiceInput::VoiceDeliveryOwner>> retired;
     {
-        return;
+        std::lock_guard<std::mutex> lock(g_send_mutex);
+        retired.swap(g_pending_voice_cancels);
     }
-    if (text.empty() || text == g_last_inline_preedit)
-    {
-        return;
-    }
-    // Updates only go to the original composition owner once it still is the
-    // current editable focus with a live route; otherwise the stream stops and
-    // a new field the user clicked into is never targeted. Keep the owner when
-    // the check fails: a Win+. round-trip advances only the generation while
-    // the DLL retains the composition, so the owner is still the only route
-    // that can cancel it later. Update/Commit stay strictly re-verified.
-    if (!OwnerRouteValid(g_inline_owner))
-    {
-        return;
-    }
-    if (SendVoiceCompositionToOwner(g_inline_owner,
-                                    Global::DataFromServerMsgTypeToTsfWorkerThread::UpdateVoiceComposition, text))
-    {
-        g_last_inline_preedit = text;
-    }
-    else
-    {
-        // The route refused this update. Leave teardown to the cancellation or
-        // commit path, which reconciles the captured identity outside the lock.
-        g_last_inline_preedit.clear();
-    }
+    for (const auto &delivery : retired)
+        delivery->Cleanup();
 }
+
+struct FlushVoiceCancelsOnExit
+{
+    ~FlushVoiceCancelsOnExit()
+    {
+        FlushVoiceCancels();
+    }
+};
 
 // Shared teardown of the inline preedit state. Must be called under g_send_mutex.
 void ResetInlinePreeditState()
 {
     g_inline_owner = VoiceInput::Target{};
     g_inline_owner_session = 0;
-    g_last_inline_preedit.clear();
+    g_inline_delivery.reset();
     g_stream_inline_this_session.store(false);
 }
 
-// Cancellation-only reconciliation. `current` was captured outside
-// g_send_mutex. The focus generation is deliberately ignored here: a Win+.
-// round-trip bumps it while the DLL keeps the composition and pipe epoch. Every
-// other SameTarget field, including the UIA runtime ID and the full client /
-// epoch / focus-token route, must still match, and the captured target must
-// still pass the no-COM fast window check with the old route still active.
-// Must be called under g_send_mutex. The local owner is cleared on both a sent
-// cancel and an identity mismatch, so it can never be reused for a new field.
-void CancelInlinePreeditFor(const VoiceInput::Target &current)
+// Cleanup carries the original numeric delivery identity. The DLL alone can
+// decide whether that exact composition is still safe to erase. Never use the
+// legacy global cancel, which could address a newer composition.
+// Must be called under g_send_mutex; wire I/O is deferred until after unlock.
+void CancelInlinePreeditFor(const VoiceInput::Target &)
 {
-    if (g_inline_owner.client != 0 && g_inline_owner.epoch != 0 &&
-        VoiceInput::SameCompositionOwner(g_inline_owner, current) && VoiceInput::IsTargetCurrentFast(current) &&
-        IsPipeRouteCurrent(g_inline_owner))
+    if (g_inline_delivery)
     {
-        SendToTsfWorkerThreadClientViaNamedpipe(g_inline_owner.client, g_inline_owner.epoch,
-                                                Global::DataFromServerMsgTypeToTsfWorkerThread::CancelVoiceComposition,
-                                                L"");
+        g_inline_delivery->Cancel();
+        g_pending_voice_cancels.push_back(g_inline_delivery);
     }
     ResetInlinePreeditState();
 }
 
-// Control-thread cancellation: take one current target outside the lock, then
-// re-identify the owner under the lock before messaging its old route.
-// `expected_session` == 0 is the explicit cancel path, which owns the current
-// composition even after the UI has already advanced the session. A non-zero
-// value is the generic invalidation guard. The owner snapshot prevents a newer
-// composition bound during the UIA capture from receiving this cancel.
+// Control-thread cancellation queues exact-owner cleanup under the send lock,
+// then flushes it after releasing the lock. Zero explicitly cancels the current
+// owner; a nonzero session only cancels that still-current session.
 bool CancelInlinePreeditOnControlThread(std::uint64_t expected_session)
 {
-    VoiceInput::Target owner;
-    std::uint64_t owner_session = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_send_mutex);
-        owner = g_inline_owner;
-        owner_session = g_inline_owner_session;
-    }
-    if (owner.client == 0 || owner.epoch == 0)
-    {
-        return false;
-    }
-    if (expected_session != 0 && (owner_session != expected_session || g_voice_session != expected_session))
-    {
-        return false;
-    }
-    const VoiceInput::Target current = CaptureVoiceTarget();
+    FlushVoiceCancelsOnExit flush;
     std::lock_guard<std::mutex> lock(g_send_mutex);
-    if ((expected_session != 0 && g_voice_session != expected_session) || g_inline_owner_session != owner_session ||
-        !VoiceInput::SameCompositionOwner(owner, g_inline_owner))
-    {
+    if (!g_inline_delivery ||
+        (expected_session != 0 && (g_inline_owner_session != expected_session || g_voice_session != expected_session)))
         return false;
-    }
-    CancelInlinePreeditFor(current);
+    CancelInlinePreeditFor(g_inline_owner);
     return true;
-}
-
-// Delivers through the captured commit route, never a freshly picked active
-// client: the destination was decided when the target snapshot was taken.
-// Returns the number of UTF-16 units successfully delivered. Each chunk starts
-// only after the route is re-verified (fast focus + live pipe); when delivery
-// stops, everything up to the returned offset is already in the field. The
-// caller shows the full original on the card and never replays any part,
-// because automatic replay would duplicate the delivered prefix.
-// Must be called under g_send_mutex.
-std::size_t SendTextViaTsf(const std::wstring &text, const VoiceInput::Target &route)
-{
-    if (text.empty() || route.client == 0 || route.epoch == 0)
-    {
-        return 0;
-    }
-    constexpr size_t maxCharsPerPacket =
-        (sizeof(((FanyImeNamedpipeDataToTsfWorkerThread *)nullptr)->data) / sizeof(wchar_t)) - 1;
-    size_t offset = 0;
-    while (offset < text.size())
-    {
-        if (!OwnerRouteValid(route))
-        {
-            break;
-        }
-        const size_t chunkLen = (std::min)(maxCharsPerPacket, text.size() - offset);
-        if (!SendToTsfWorkerThreadClientViaNamedpipe(route.client, route.epoch,
-                                                     Global::DataFromServerMsgTypeToTsfWorkerThread::InsertText,
-                                                     text.substr(offset, chunkLen)))
-        {
-            break;
-        }
-        offset += chunkLen;
-    }
-    return offset;
 }
 
 void CommitRecognizedText(const std::string &utf8, const VoiceInputConfig &config, bool stream_inline,
@@ -1077,7 +1020,8 @@ void CommitRecognizedText(const std::string &utf8, const VoiceInputConfig &confi
     // cross-process query is slow and the lock stays lean (no COM under it).
     const VoiceInput::Target final_target = CaptureVoiceTarget();
 
-    std::lock_guard<std::mutex> send_lock(g_send_mutex);
+    FlushVoiceCancelsOnExit flush;
+    std::unique_lock<std::mutex> send_lock(g_send_mutex);
     if (g_voice_session != voice_session)
     {
         return;
@@ -1101,10 +1045,26 @@ void CommitRecognizedText(const std::string &utf8, const VoiceInputConfig &confi
         {
             CancelInlinePreeditFor(final_target);
         }
-        // Both windows share this recording's bottom anchor. Hide the status
-        // before showing the card so its entrance never overlaps the old bar.
-        g_overlay.hide();
-        g_result_card.show(voice_session, card_text);
+        // Retain the complete authoritative value before any presentation attempt. The card shows
+        // it directly; recovery keeps only a preview while Copy reads this value by session.
+        StoreRetainedResult(voice_session, card_text);
+        // Both windows share this recording's bottom anchor. Finish the ordinary recognition UI,
+        // but never call hide() here: that would clear a recovery result published concurrently.
+        g_overlay.finish_recognition(voice_session);
+        const bool card_available = g_result_card_available.load();
+        const bool overlay_available = g_overlay.is_available();
+        const bool presented = VoiceInput::RouteRetainedResult(
+            voice_session, card_text, card_available, overlay_available,
+            [&](std::uint64_t session, const std::wstring &text) {
+                return g_result_card.show_with_outcome(session, text);
+            },
+            [&](std::uint64_t session, const std::wstring &text) { return g_overlay.show_recovery(session, text); });
+        if (!presented)
+        {
+            // Model-level rejection (stale/dismissed) is intentional; lost surfaces are diagnostic.
+            DIAG_LOGF(L"voice: retained result not presented (session={}, card_available={}, overlay_available={})",
+                      voice_session, card_available, overlay_available);
+        }
     };
 
     switch (VoiceInput::DecideVoiceCommit(ctx))
@@ -1115,52 +1075,56 @@ void CommitRecognizedText(const std::string &utf8, const VoiceInputConfig &confi
         show_card(text);
         return;
     case VoiceInput::VoiceCommitAction::CommitComposition:
-        // Only reached when the final target is still the bound inline owner
-        // with a current route; commit through that owner.
-        if (SendVoiceCompositionToOwner(g_inline_owner,
-                                        Global::DataFromServerMsgTypeToTsfWorkerThread::CommitVoiceComposition, text))
+    case VoiceInput::VoiceCommitAction::CommitTsf: {
+        if (!ctx.has_bound_route)
         {
-            ResetInlinePreeditState();
+            if (!FastVerifiedSendInput(text, final_target))
+                show_card(text);
             return;
         }
-        // The prefix was already streamed into the old field; replaying the
-        // full text would duplicate it, so the full result stays in the card.
-        // Never SendInput from scratch here.
-        CancelInlinePreeditFor(final_target);
-        show_card(text);
-        return;
-    case VoiceInput::VoiceCommitAction::CommitTsf:
-        // Plain insert on the captured route: cancel any local preedit first
-        // (owner mismatch or no streaming); never pick a newer active client.
-        if (stream_inline)
+        std::shared_ptr<VoiceInput::VoiceDeliveryOwner> delivery;
+        if (g_inline_owner_session == voice_session && g_inline_delivery &&
+            VoiceInput::SameTarget(g_inline_owner, final_target))
         {
-            CancelInlinePreeditFor(final_target);
+            delivery = g_inline_delivery;
         }
-        if (ctx.has_bound_route)
+        else
         {
-            // A live captured route was the basis of this commit. Once a chunk
-            // failed, the delivered prefix is already in the field and replaying
-            // any part would duplicate input, so the card carries the complete
-            // original text and SendInput is never used on this path.
-            const std::size_t delivered = SendTextViaTsf(text, final_target);
-            if (delivered == text.size())
+            // An existing streamed owner cannot be replaced by a fresh insert:
+            // that would replay its prefix. Preserve the transcript for copying.
+            if (g_inline_delivery)
             {
+                show_card(text);
                 return;
             }
-            // The card is the Copy surface and must retain the full original
-            // transcript even when a prefix already reached the field; nothing
-            // is replayed automatically.
-            show_card(VoiceInput::TextForCardAfterTsfDelivery(text, delivered));
-            return;
+            auto opened = VoiceFinalIpc::Open(final_target.client, final_target.epoch, final_target.focus_token,
+                                              GetTickCount64() + 1500);
+            // Old DLLs cannot provide a commit result. Keep the complete text
+            // before emitting any legacy voice insertion or preview.
+            if (opened.status != VoiceFinalIpc::OpenStatus::Ready)
+            {
+                show_card(text);
+                return;
+            }
+            delivery = std::make_shared<VoiceInput::VoiceDeliveryOwner>(std::move(opened.channel));
+            g_inline_delivery = delivery;
+            g_inline_owner = final_target;
+            g_inline_owner_session = voice_session;
         }
-        // No captured route (native / non-TSF target): the policy's SendInput
-        // default fallback applies, re-verified at send time.
-        if (FastVerifiedSendInput(text, final_target))
-        {
+        send_lock.unlock();
+        const auto result = delivery->Finish(text);
+        send_lock.lock();
+        // A cancelled/older result owns neither a new recording nor its card.
+        if (g_voice_session != voice_session || g_inline_delivery != delivery)
             return;
-        }
-        show_card(text);
+        if (result == VoiceFinalServer::AckResult::RejectedNoWrite)
+            CancelInlinePreeditFor(final_target);
+        else
+            ResetInlinePreeditState(); // Unknown retains host text; never erase/replay.
+        if (result != VoiceFinalServer::AckResult::Applied)
+            show_card(text);
         return;
+    }
     case VoiceInput::VoiceCommitAction::CommitSendInput:
         if (FastVerifiedSendInput(text, final_target))
         {
@@ -1211,35 +1175,46 @@ void AudioCallback(const float *samples, std::size_t frames)
 void InvalidateVoiceSession()
 {
     const std::uint64_t session = g_voice_session.load();
-    // Capture outside the send lock; the helper re-checks the owner snapshot,
-    // its session and the live route after re-taking the lock.
+    // Cancel only this session, then drain exact-owner cleanup outside the send lock.
     CancelInlinePreeditOnControlThread(session);
-    std::lock_guard<std::mutex> send_lock(g_send_mutex);
-    if (g_voice_session != session)
+    std::uint64_t invalidated_session = 0;
     {
-        // Another invalidation or a new recording already advanced the
-        // session while the cancellation capture ran. Never disturb it.
-        return;
+        std::lock_guard<std::mutex> send_lock(g_send_mutex);
+        if (g_voice_session != session)
+        {
+            // Another invalidation or a new recording already advanced the
+            // session while cancellation cleanup ran. Never disturb it.
+            return;
+        }
+        invalidated_session = ++g_voice_session;
+        ClearRetainedResult();
+        g_result_card.reset(invalidated_session);
+        if (g_inline_delivery)
+            g_inline_delivery->Cancel();
+        g_stream_inline_this_session.store(false);
     }
-    ++g_voice_session;
-    g_result_card.reset(g_voice_session);
-    g_last_inline_preedit.clear();
-    g_stream_inline_this_session.store(false);
+    // set_session only publishes the monotonic fence; overlay UI work is posted separately. This is
+    // safe after releasing g_send_mutex and a newer session that races is never regressed.
+    g_overlay.set_session(invalidated_session);
 }
 
 // UI-thread cancellation can only touch atomics/lock-protected state. It
 // invalidates the session immediately so a late recognition callback cannot
-// show a card or commit, but leaves the inline owner for the queued
-// control-thread cleanup that performs the one UIA capture.
+// show a card or commit. Exact wire cleanup is queued for the control thread;
+// no pipe write or wait occurs on this UI path.
 std::uint64_t InvalidateVoiceSessionFromUi()
 {
-    std::lock_guard<std::mutex> send_lock(g_send_mutex);
-    const std::uint64_t session_cookie = ++g_voice_session;
-    if (g_starting.load())
-        g_abort_start = true;
-    g_result_card.reset(g_voice_session);
-    g_last_inline_preedit.clear();
-    g_stream_inline_this_session.store(false);
+    std::uint64_t session_cookie = 0;
+    {
+        std::lock_guard<std::mutex> send_lock(g_send_mutex);
+        session_cookie = ++g_voice_session;
+        if (g_starting.load())
+            g_abort_start = true;
+        ClearRetainedResult();
+        g_result_card.reset(session_cookie);
+        CancelInlinePreeditFor(g_inline_owner);
+    }
+    g_overlay.set_session(session_cookie);
     return session_cookie;
 }
 
@@ -1304,11 +1279,15 @@ bool StartRecording()
         std::lock_guard<std::mutex> send_lock(g_send_mutex);
         voice_session = ++g_voice_session;
         g_dismissed_overlay_session = 0;
+        ClearRetainedResult();
         g_result_card.reset(voice_session);
-        g_overlay.hide();
         g_overlay.set_anchor(overlay_anchor);
         g_result_card.set_anchor(overlay_anchor);
     }
+    // Bind the hide/show notifications to the new session before posting them. The UI handler can
+    // then retire an older recovery result without letting a delayed old-session hide cover this one.
+    g_overlay.set_session(voice_session);
+    g_overlay.hide();
     if (want_inline)
     {
         // Pin the inline composition owner to the input target captured at the
@@ -1320,9 +1299,14 @@ bool StartRecording()
         std::lock_guard<std::mutex> send_lock(g_send_mutex);
         if (owner.client != 0 && owner.epoch != 0 && g_voice_session == voice_session && OwnerRouteValid(owner))
         {
-            g_inline_owner = owner;
-            g_inline_owner_session = voice_session;
-            g_stream_inline_this_session.store(true);
+            auto opened = VoiceFinalIpc::Open(owner.client, owner.epoch, owner.focus_token, GetTickCount64() + 1500);
+            if (opened.status == VoiceFinalIpc::OpenStatus::Ready)
+            {
+                g_inline_delivery = std::make_shared<VoiceInput::VoiceDeliveryOwner>(std::move(opened.channel));
+                g_inline_owner = owner;
+                g_inline_owner_session = voice_session;
+                g_stream_inline_this_session.store(true);
+            }
         }
     }
     g_overlay.set_show_transcript(!g_stream_inline_this_session.load());
@@ -1343,10 +1327,7 @@ bool StartRecording()
                 const std::wstring wide = string_to_wstring(text);
                 if (!g_stream_inline_this_session.load())
                     g_overlay.set_transcript(wide);
-                std::lock_guard<std::mutex> send_lock(g_send_mutex);
-                if (g_voice_session != voice_session)
-                    return;
-                PushInlinePreedit(wide);
+                PushInlinePreedit(wide, voice_session);
             });
         if (!g_doubao_asr->Start())
         {
@@ -1525,19 +1506,19 @@ void StopRecording()
             {
                 g_overlay.set_compact_status(WaveOverlay::CompactStatus::None);
                 g_overlay.set_actions_visible(false);
-                g_overlay.hide();
+                g_overlay.finish_recognition(voice_session);
             }
             if (!polishing && stream_inline && g_voice_session == voice_session)
             {
                 g_overlay.set_compact_status(WaveOverlay::CompactStatus::None);
                 g_overlay.set_actions_visible(false);
-                g_overlay.hide();
+                g_overlay.finish_recognition(voice_session);
             }
             if (polishing && g_voice_session == voice_session)
             {
                 g_overlay.set_compact_status(WaveOverlay::CompactStatus::None);
                 g_overlay.set_actions_visible(false);
-                g_overlay.hide();
+                g_overlay.finish_recognition(voice_session);
                 g_overlay.set_transcript(L"");
             }
             if (text.empty() && stream_inline)
@@ -1545,6 +1526,7 @@ void StopRecording()
                 // The session is re-checked inside the lock: a cancel that
                 // advanced the session during recognition must not tear down a
                 // newer session's composition.
+                FlushVoiceCancelsOnExit flush;
                 const VoiceInput::Target current = CaptureVoiceTarget();
                 std::lock_guard<std::mutex> send_lock(g_send_mutex);
                 if (g_voice_session == voice_session)
@@ -1558,7 +1540,7 @@ void StopRecording()
             {
                 g_overlay.set_compact_status(WaveOverlay::CompactStatus::None);
                 g_overlay.set_actions_visible(false);
-                g_overlay.hide();
+                g_overlay.finish_recognition(voice_session);
                 g_overlay.set_transcript(L"");
             }
         }));
@@ -1576,40 +1558,7 @@ void CancelRecordingForSession(std::uint64_t session_cookie)
         return;
     }
 
-    VoiceInput::Target owner;
-    VoiceInput::ControlPolicy::CancelSnapshot snapshot;
-    snapshot.session_cookie = session_cookie;
-    {
-        std::lock_guard<std::mutex> send_lock(g_send_mutex);
-        if (g_voice_session != session_cookie)
-            return;
-        owner = g_inline_owner;
-        snapshot.owner_session = g_inline_owner_session;
-    }
-
-    if (owner.client != 0 && owner.epoch != 0)
-    {
-        const VoiceInput::Target current = CaptureVoiceTarget();
-        std::lock_guard<std::mutex> send_lock(g_send_mutex);
-        if (g_voice_session != session_cookie)
-            return;
-        if (g_inline_owner_session == snapshot.owner_session && VoiceInput::SameCompositionOwner(owner, g_inline_owner))
-        {
-            const bool route_current = VoiceInput::IsTargetCurrentFast(current) && IsPipeRouteCurrent(owner);
-            if (VoiceInput::ControlPolicy::SessionCancelStillValid(
-                    snapshot, VoiceInput::ControlPolicy::CancelCurrent{g_voice_session.load(), g_inline_owner_session,
-                                                                       true, route_current}))
-            {
-                CancelInlinePreeditFor(current);
-            }
-            else
-            {
-                // The local owner is unchanged but its captured route is gone:
-                // clear that stale snapshot and never touch a newer owner.
-                ResetInlinePreeditState();
-            }
-        }
-    }
+    CancelInlinePreeditOnControlThread(session_cookie);
 
     if (g_voice_session != session_cookie)
         return;
@@ -1698,44 +1647,61 @@ bool VoiceInput::Initialize()
             g_message_window = nullptr;
         }
         g_cue_player.shutdown();
+        g_result_card_available.store(false);
         g_result_card.shutdown();
         g_overlay.shutdown();
+        ClearRetainedResult();
         VoiceInput::ShutdownTargetTracking();
         curl_global_cleanup();
         g_initialized = false;
     };
 
     const HINSTANCE instance = GetModuleHandleW(nullptr);
-    if (!g_overlay.init(instance, [](WaveOverlay::Action action) {
-            if (action == WaveOverlay::Action::Cancel)
-            {
-                // Fence the session now, then queue cleanup directly with the
-                // new cookie. This bypasses the message window and the generic
-                // Start/Stop filters, so a recognition-state cancel still runs.
-                const std::uint64_t session_cookie = InvalidateVoiceSessionFromUi();
-                EnqueueControlCommand(ControlCommand::Cancel, session_cookie);
-                return;
-            }
-            if (g_recording)
-            {
-                if (g_message_window)
-                    PostMessageW(g_message_window, kStopRecordingMessage, 0, 0);
-                return;
-            }
-            g_dismissed_overlay_session = g_voice_session.load();
-            g_overlay.set_actions_visible(false);
-            g_overlay.hide();
-        }))
+    if (!g_overlay.init(
+            instance,
+            [](WaveOverlay::Action action) {
+                if (action == WaveOverlay::Action::Cancel)
+                {
+                    // Fence the session now, then queue cleanup directly with the
+                    // new cookie. This bypasses the message window and the generic
+                    // Start/Stop filters, so a recognition-state cancel still runs.
+                    const std::uint64_t session_cookie = InvalidateVoiceSessionFromUi();
+                    EnqueueControlCommand(ControlCommand::Cancel, session_cookie);
+                    return;
+                }
+                // Copy is fully handled on the overlay UI thread against the service-owned full
+                // text. Close only dismisses the visual recovery result. Neither action reuses the
+                // recording Confirm path.
+                if (action == WaveOverlay::Action::Copy || action == WaveOverlay::Action::Close)
+                    return;
+                if (g_recording)
+                {
+                    if (g_message_window)
+                        PostMessageW(g_message_window, kStopRecordingMessage, 0, 0);
+                    return;
+                }
+                g_dismissed_overlay_session = g_voice_session.load();
+                g_overlay.set_actions_visible(false);
+                g_overlay.hide();
+            },
+            [](HWND owner, std::uint64_t session, const std::wstring &text) {
+                return CopyRetainedResultToClipboard(owner, session, text);
+            }))
     {
         cleanup_failed_init();
         return false;
     }
-    // The result card keeps the final transcript on screen when there is no
-    // editable target. It is created on the Server UI thread like the overlay.
-    if (!g_result_card.init(instance))
+    // The result card is the preferred retained-result surface, but a card
+    // initialization failure must not disable an otherwise usable voice service.
+    // The unified router falls back to the already initialized overlay recovery mode.
+    g_result_card_available.store(false);
+    if (g_result_card.init(instance))
     {
-        cleanup_failed_init();
-        return false;
+        g_result_card_available.store(true);
+    }
+    else
+    {
+        DIAG_LOGF(L"voice: result card init failed; using overlay recovery for retained results");
     }
     // Focus tracking hooks are installed on the pumping UI thread. A failed
     // install fails closed: captures report non-editable and results go to the
@@ -1868,7 +1834,9 @@ void VoiceInput::Shutdown()
     }
     g_cue_player.shutdown();
     g_overlay.shutdown();
+    g_result_card_available.store(false);
     g_result_card.shutdown();
+    ClearRetainedResult();
     VoiceInput::ShutdownTargetTracking();
     ResetKeyboardShortcutState();
     g_ralt_lock_mode = false;

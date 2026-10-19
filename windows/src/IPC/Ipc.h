@@ -32,7 +32,8 @@ void BindNamedpipeFocusState(
     _In_opt_ std::atomic<UINT> *localSessionResetToken, _In_opt_ std::atomic<bool> *workerCommitReady,
     _In_opt_ std::atomic<uint64_t> *acknowledgedWorkerFocusToken, _In_opt_ std::atomic<HANDLE> *workerPipeHandle,
     _In_opt_ std::atomic<UINT> *workerPipeGeneration,
-    _In_opt_ std::atomic<FanyImeTemporaryJapanese::Policy> *temporaryJapanesePolicy);
+    _In_opt_ std::atomic<FanyImeTemporaryJapanese::Policy> *temporaryJapanesePolicy,
+    std::atomic<uint32_t> *voiceServerCapabilities);
 FanyImeTemporaryJapanese::Policy GetTemporaryJapanesePolicy();
 // Wake-up events owned by the bound service, so the UI thread and the IPC worker
 // thread block instead of polling. workerAckEvent is signalled by the worker when

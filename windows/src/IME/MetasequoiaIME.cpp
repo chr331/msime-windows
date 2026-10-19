@@ -374,6 +374,9 @@ CMetasequoiaIME::~CMetasequoiaIME()
     }
     // The owner-aware unbind above already cleared the TLS copies.
     _CloseIpcWakeEvents();
+    // Release UI-owned voice COM references while the module still owns its DLL reference.
+    _voiceDeliveries.reset();
+    _voiceDeliveryUi.reset();
     // Last: once the count drops, another thread may unload this DLL while code above is still running.
     DllRelease();
 }
@@ -799,7 +802,7 @@ STDAPI CMetasequoiaIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClient
     BindNamedpipeFocusState(this, &_focusResetPending, &_activationRequired, &_expectedWorkerFocusToken,
                             &_localSessionResetPending, &_localSessionResetToken, &_workerCommitReady,
                             &_acknowledgedWorkerFocusToken, &_hToTsfWorkerThreadPipe, &_workerPipeGeneration,
-                            &_temporaryJapanesePolicy);
+                            &_temporaryJapanesePolicy, &_voiceServerCapabilities);
 
     /*
     std::wstring processName = FanyUtils::GetCurrentProcessName();
@@ -844,6 +847,7 @@ STDAPI CMetasequoiaIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClient
     }
     SetWindowLongPtr(_msgWndHandle, GWLP_USERDATA, (LONG_PTR)this);
     Global::msgWndHandle = _msgWndHandle;
+    _InitializeVoiceDelivery();
     _StartThemeRegistryWatcher();
 
     BOOL hasThreadFocus = FALSE;
@@ -991,7 +995,7 @@ STDAPI CMetasequoiaIME::Deactivate()
     }
     _hToTsfWorkerThreadPipe.store(nullptr);
     InvalidateNamedpipeWorkerGeneration();
-    // The worker no longer has an outstanding OVERLAPPED operation, so the
+    // The worker no longer has an outstanding OVERLAPPED read or write, so the
     // UI thread can now close all three handles safely.
     CloseIpc();
     if (_ipcStopEvent)
@@ -1031,6 +1035,11 @@ STDAPI CMetasequoiaIME::Deactivate()
     {
         pContext->Release();
     }
+
+    // Release UI-owned context/composition references during Deactivate, including Unknown
+    // deliveries. Accepted edit sessions retain their own exact binding until host completion.
+    _voiceDeliveryUi.reset();
+    _voiceDeliveries.reset();
 
     _DrainPendingCandidatePresenterCleanup();
 

@@ -247,25 +247,75 @@ void TestSendUnicodeStopsOnZeroOrPartialInjection()
 {
     const std::wstring text = L"abc";
     std::size_t calls = 0;
+    std::size_t cleanup_calls = 0;
     const auto inject_zero = [&calls](wchar_t) -> std::uint32_t {
         ++calls;
         return 0;
     };
-    CHECK(SendUnicodeTextWith(text, inject_zero) == 0);
-    CHECK(calls == 1); // The first short result stops all later input.
+    const auto cleanup = [&cleanup_calls](wchar_t) -> std::uint32_t {
+        ++cleanup_calls;
+        return 1;
+    };
+    CHECK(SendUnicodeTextWith(text, inject_zero, cleanup) == 0);
+    CHECK(calls == 1);         // The first short result stops all later input.
+    CHECK(cleanup_calls == 0); // Zero injected events left no key-down behind.
 
     calls = 0;
+    cleanup_calls = 0;
     const std::uint32_t partial_results[] = {2, 1, 2};
     const auto inject_partial = [&calls, &partial_results](wchar_t) -> std::uint32_t {
         const std::uint32_t result = partial_results[calls];
         ++calls;
         return result;
     };
-    CHECK(SendUnicodeTextWith(text, inject_partial) == 1);
+    wchar_t cleanup_unit = 0;
+    const auto cleanup_one = [&cleanup_calls, &cleanup_unit](wchar_t ch) -> std::uint32_t {
+        ++cleanup_calls;
+        cleanup_unit = ch;
+        return 1;
+    };
+    CHECK(SendUnicodeTextWith(text, inject_partial, cleanup_one) == 1);
     CHECK(calls == 2);
+    CHECK(cleanup_calls == 1);
+    CHECK(cleanup_unit == L'b');
 
-    const auto inject_all = [](wchar_t) -> std::uint32_t { return 2; };
-    CHECK(SendUnicodeTextWith(text, inject_all) == text.size());
+    // A failed KEYUP was still attempted exactly once; the partial character
+    // stays undelivered and no later character is sent.
+    calls = 0;
+    cleanup_calls = 0;
+    const auto cleanup_fails = [&cleanup_calls](wchar_t) -> std::uint32_t {
+        ++cleanup_calls;
+        return 0;
+    };
+    CHECK(SendUnicodeTextWith(text, inject_partial, cleanup_fails) == 1);
+    CHECK(calls == 2);
+    CHECK(cleanup_calls == 1);
+
+    calls = 0;
+    cleanup_calls = 0;
+    const auto inject_all = [&calls](wchar_t) -> std::uint32_t {
+        ++calls;
+        return 2;
+    };
+    CHECK(SendUnicodeTextWith(text, inject_all, cleanup) == text.size());
+    CHECK(calls == text.size());
+    CHECK(cleanup_calls == 0);
+
+    // The cleanup unit is the exact UTF-16 unit that was partially injected:
+    // the low surrogate of a pair, not the preceding high surrogate.
+    const std::wstring surrogate_pair = L"\xD83D\xDE00Z";
+    calls = 0;
+    cleanup_calls = 0;
+    const std::uint32_t surrogate_results[] = {2, 1, 2};
+    const auto inject_surrogate = [&calls, &surrogate_results](wchar_t) -> std::uint32_t {
+        const std::uint32_t result = surrogate_results[calls];
+        ++calls;
+        return result;
+    };
+    CHECK(SendUnicodeTextWith(surrogate_pair, inject_surrogate, cleanup_one) == 1);
+    CHECK(calls == 2);
+    CHECK(cleanup_calls == 1);
+    CHECK(cleanup_unit == static_cast<wchar_t>(0xDE00));
 }
 
 void TestCtrlVInjectionCleanupClassification()

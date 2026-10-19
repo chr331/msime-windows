@@ -835,6 +835,7 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
     }
 
     uint64_t registrationId = 0;
+    std::shared_ptr<VoiceFinalServer::PendingRegistry> voiceAckRegistry;
     if (pipeRole == FanyImePipeRole::ToTsf)
     {
         registrationId = RegisterToTsfPipeClient(hello.client_id, clientPipe);
@@ -844,6 +845,7 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
         registrationId = RegisterToTsfWorkerThreadPipeClient(hello.client_id, clientPipe);
         if (registrationId != 0)
         {
+            voiceAckRegistry = GetVoicePendingRegistry(hello.client_id, registrationId);
             SendToTsfWorkerThreadClientViaNamedpipe(
                 hello.client_id, Global::DataFromServerMsgTypeToTsfWorkerThread::PagingCommaPeriodChanged,
                 FormatPagingCommaPeriodWorkerPayload());
@@ -939,17 +941,41 @@ void RegisteredPipeMonitorThread(HANDLE clientPipe, UINT pipeRole, uint64_t hand
     const wchar_t *pipeName = pipeRole == FanyImePipeRole::ToTsf ? L"to-tsf-pipe" : L"to-tsf-worker-pipe";
     while (pipe_running && IsPipeClientRegistrationCurrent(hello.client_id, pipeRole, registrationId))
     {
-        DWORD bytesAvailable = 0;
-        if (!PeekNamedPipe(monitorPipe, nullptr, 0, nullptr, &bytesAvailable, nullptr))
+        if (pipeRole == FanyImePipeRole::ToTsfWorkerThread && voiceAckRegistry)
         {
-            LogPipeReadFailure(pipeName, 0);
-            break;
+            // ACKs are fixed 48-byte messages on the reverse side of this same
+            // worker pipe. The monitor is their only reader. Unknown/duplicate
+            // ACKs are ignored by the registry; malformed framing or a broken
+            // connection retires this registration.
+            std::size_t messagesRead = 0;
+            const VoiceFinalServer::AckReadStatus status =
+                VoiceFinalServer::ReadVoiceAckMessages(monitorPipe, *voiceAckRegistry, messagesRead);
+            if (status == VoiceFinalServer::AckReadStatus::ProtocolError ||
+                status == VoiceFinalServer::AckReadStatus::Disconnected)
+            {
+                LogPipeReadFailure(pipeName, 0);
+                break;
+            }
+        }
+        else
+        {
+            DWORD bytesAvailable = 0;
+            if (!PeekNamedPipe(monitorPipe, nullptr, 0, nullptr, &bytesAvailable, nullptr))
+            {
+                LogPipeReadFailure(pipeName, 0);
+                break;
+            }
         }
         Sleep(20);
     }
 
     const PipeClientUnregisterResult result =
         UnregisterPipeClientHandle(hello.client_id, pipeRole, clientPipe, registrationId);
+    // Unregister has already removed the route; completing the captured
+    // registry now makes every waiter fall back to Unknown/NoWrite and rejects
+    // any late ACK that arrives after the next worker generation registers.
+    if (voiceAckRegistry)
+        voiceAckRegistry->CompleteConnection(VoiceFinalServer::AckResult::RejectedNoWrite);
     EnqueuePipeSessionInvalidatedTask(hello.client_id, result.deactivation_epoch);
     LogPipeDisconnect(pipeName);
     CloseHandle(monitorPipe);

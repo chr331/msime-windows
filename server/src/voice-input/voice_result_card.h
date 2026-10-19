@@ -2,6 +2,7 @@
 
 #include "voice_overlay_layout.h"
 #include "voice_result_card_model.h"
+#include "voice_result_router.h"
 
 #include <windows.h>
 #include <atomic>
@@ -42,7 +43,11 @@ class VoiceResultCard
     void reset(std::uint64_t session);
     // Show the final result for the current generation. Ignored when the session is stale, the
     // card was dismissed, or the text is empty.
-    void show(std::uint64_t session, const std::wstring &text);
+    bool show(std::uint64_t session, const std::wstring &text);
+    // Distinguishes an intentional model rejection from a lost card surface. The router uses
+    // this to fall back only when the card cannot present anything, never to bypass a dismissed
+    // or stale generation.
+    VoiceInput::RetainedResultPresentation show_with_outcome(std::uint64_t session, const std::wstring &text);
     // Dismiss the current generation unconditionally (programmatic cancel of the current recording
     // era). The UI's close button/right-click instead uses the atomic shown-verifying dismiss, so a
     // stale click can never close a newer card.

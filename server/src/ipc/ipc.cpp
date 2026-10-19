@@ -8,6 +8,7 @@
 #include <AclAPI.h>
 #include <Sddl.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <iterator>
@@ -22,6 +23,7 @@
 #include "ipc/event_listener.h"
 #include "ipc/outbound_session_state.h"
 #include "ipc/pipe_write_policy.h"
+#include "ipc/pipe_endpoint.h"
 #include "ipc/terminal_deactivation_policy.h"
 #include "statistics/stats_pipe.h"
 #include "utils/common_utils.h"
@@ -44,79 +46,7 @@ static bool canUseNamedPipe = true;
 
 namespace
 {
-class PipeEndpoint
-{
-  public:
-    explicit PipeEndpoint(HANDLE pipe) : pipe_(pipe)
-    {
-    }
-
-    ~PipeEndpoint()
-    {
-        Shutdown();
-        if (pipe_ && pipe_ != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(pipe_);
-        }
-    }
-
-    PipeEndpoint(const PipeEndpoint &) = delete;
-    PipeEndpoint &operator=(const PipeEndpoint &) = delete;
-
-    HANDLE handle() const
-    {
-        return pipe_;
-    }
-
-    void Shutdown()
-    {
-        if (!shutting_down_.exchange(true) && pipe_ && pipe_ != INVALID_HANDLE_VALUE)
-        {
-            // Do not close here: a writer may still hold a shared reference. Disconnecting
-            // wakes blocked pipe I/O, and the handle is closed exactly once by the destructor.
-            DisconnectNamedPipe(pipe_);
-        }
-    }
-
-    bool Write(const void *data, DWORD data_size, DWORD &bytes_written, DWORD &write_error)
-    {
-        std::lock_guard lock(write_mutex_);
-        bytes_written = 0;
-        if (shutting_down_.load())
-        {
-            write_error = ERROR_PIPE_NOT_CONNECTED;
-            return false;
-        }
-
-        const BOOL result = WriteFile(pipe_, data, data_size, &bytes_written, nullptr);
-        if (!result)
-        {
-            write_error = GetLastError();
-            return false;
-        }
-        if (!FanyImeIpc::IsCompleteMessageFrameWrite(true, bytes_written, data_size))
-        {
-            write_error = bytes_written == 0 ? ERROR_NO_DATA : ERROR_WRITE_FAULT;
-            return false;
-        }
-        write_error = ERROR_SUCCESS;
-        return true;
-    }
-
-    HANDLE ReleaseHandle()
-    {
-        std::lock_guard lock(write_mutex_);
-        shutting_down_.store(true);
-        const HANDLE released = pipe_;
-        pipe_ = INVALID_HANDLE_VALUE;
-        return released;
-    }
-
-  private:
-    HANDLE pipe_ = INVALID_HANDLE_VALUE;
-    std::mutex write_mutex_;
-    std::atomic_bool shutting_down_ = false;
-};
+using FanyImeIpc::PipeEndpoint;
 
 class PipeControlHandle
 {
@@ -162,6 +92,7 @@ struct PipeClientSession
     std::shared_ptr<PipeEndpoint> to_tsf_worker_thread_pipe;
     uint64_t to_tsf_worker_thread_registration_id = 0;
     bool to_tsf_worker_thread_ready = false;
+    std::shared_ptr<VoiceFinalServer::PendingRegistry> voice_pending;
     uint64_t focus_token = 0;
     uint64_t inactive_focus_token = 0;
     FanyImeIpc::OutboundSessionState outbound_state;
@@ -172,6 +103,7 @@ std::condition_variable g_pipe_clients_cv;
 std::unordered_map<uint64_t, PipeClientSession> g_pipe_clients;
 FanyImeIpc::ActiveClientState g_active_client_state;
 uint64_t g_next_pipe_registration_id = 0;
+std::atomic<uint64_t> g_next_voice_delivery_id{0};
 
 std::mutex g_pipe_handlers_mutex;
 std::condition_variable g_pipe_handlers_cv;
@@ -809,7 +741,7 @@ bool NegotiateMainPipeClient(const FanyImeNamedpipeData &hello, uint64_t registr
         hello, FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
                    FanyImeProtocol::CompositionRestore | FanyImeProtocol::CaretStateIndicator |
                    FanyImeProtocol::TrilingualCycle | FanyImeProtocol::InputStateShortcuts |
-                   FanyImeProtocol::TemporaryJapaneseLongVowel);
+                   FanyImeProtocol::TemporaryJapaneseLongVowel | FanyImeProtocol::VoiceDeliveryAck);
     std::lock_guard lock(g_pipe_clients_mutex);
     auto it = g_pipe_clients.find(hello.client_id);
     if (it == g_pipe_clients.end() || registration_id == 0 || it->second.main_registration_id != registration_id)
@@ -874,6 +806,14 @@ bool ClientNegotiatedTemporaryJapanese(uint64_t client_id)
     const auto it = g_pipe_clients.find(client_id);
     return it != g_pipe_clients.end() && !it->second.protocol.legacy &&
            (it->second.protocol.capabilities & FanyImeProtocol::TemporaryJapaneseLongVowel) != 0;
+}
+
+bool ClientNegotiatedVoiceDeliveryAck(uint64_t client_id)
+{
+    std::lock_guard lock(g_pipe_clients_mutex);
+    const auto it = g_pipe_clients.find(client_id);
+    return it != g_pipe_clients.end() && !it->second.protocol.legacy &&
+           (it->second.protocol.capabilities & FanyImeProtocol::VoiceDeliveryAck) != 0;
 }
 
 uint64_t RegisterToTsfPipeClient(uint64_t client_id, HANDLE pipe)
@@ -963,6 +903,7 @@ uint64_t RegisterToTsfWorkerThreadPipeClient(uint64_t client_id, HANDLE pipe)
     auto new_endpoint = std::make_shared<PipeEndpoint>(pipe);
     std::shared_ptr<PipeEndpoint> replaced_endpoint;
     std::shared_ptr<PipeEndpoint> failed_endpoint;
+    std::shared_ptr<VoiceFinalServer::PendingRegistry> replaced_pending;
     uint64_t registration_id = 0;
     DWORD bytes_written = 0;
     DWORD write_error = ERROR_SUCCESS;
@@ -986,6 +927,8 @@ uint64_t RegisterToTsfWorkerThreadPipeClient(uint64_t client_id, HANDLE pipe)
             session.to_tsf_worker_thread_ready = true;
             session.outbound_state.mark_recovered(FanyImeIpc::OutboundRoute::Worker);
             registration_id = session.to_tsf_worker_thread_registration_id;
+            replaced_pending = std::move(session.voice_pending);
+            session.voice_pending = std::make_shared<VoiceFinalServer::PendingRegistry>(registration_id);
         }
         else
         {
@@ -1011,6 +954,10 @@ uint64_t RegisterToTsfWorkerThreadPipeClient(uint64_t client_id, HANDLE pipe)
     {
         replaced_endpoint->Shutdown();
     }
+    if (replaced_pending)
+    {
+        replaced_pending->CompleteConnection(VoiceFinalServer::AckResult::RejectedNoWrite);
+    }
     g_pipe_clients_cv.notify_all();
     return registration_id;
 }
@@ -1025,6 +972,7 @@ PipeClientUnregisterResult UnregisterPipeClientHandle(uint64_t client_id, UINT p
     }
 
     std::vector<std::shared_ptr<PipeEndpoint>> endpoints_to_shutdown;
+    std::shared_ptr<VoiceFinalServer::PendingRegistry> pending_to_retire;
     HANDLE main_control_pipe_to_close = INVALID_HANDLE_VALUE;
     {
         std::lock_guard lock(g_pipe_clients_mutex);
@@ -1072,6 +1020,7 @@ PipeClientUnregisterResult UnregisterPipeClientHandle(uint64_t client_id, UINT p
             endpoints_to_shutdown.push_back(std::move(it->second.to_tsf_worker_thread_pipe));
             it->second.to_tsf_worker_thread_registration_id = 0;
             it->second.to_tsf_worker_thread_ready = false;
+            pending_to_retire = std::move(it->second.voice_pending);
             it->second.outbound_state.mark_failed(FanyImeIpc::OutboundRoute::Worker);
             if (g_active_client_state.is_current(client_id))
             {
@@ -1097,7 +1046,23 @@ PipeClientUnregisterResult UnregisterPipeClientHandle(uint64_t client_id, UINT p
         CloseHandle(main_control_pipe_to_close);
     }
     ShutdownEndpoints(std::move(endpoints_to_shutdown));
+    if (pending_to_retire)
+    {
+        pending_to_retire->CompleteConnection(VoiceFinalServer::AckResult::RejectedNoWrite);
+    }
     return result;
+}
+
+std::shared_ptr<VoiceFinalServer::PendingRegistry> GetVoicePendingRegistry(uint64_t client_id, uint64_t registration_id)
+{
+    std::lock_guard lock(g_pipe_clients_mutex);
+    const auto it = g_pipe_clients.find(client_id);
+    if (it == g_pipe_clients.end() || registration_id == 0 ||
+        it->second.to_tsf_worker_thread_registration_id != registration_id)
+    {
+        return {};
+    }
+    return it->second.voice_pending;
 }
 
 bool IsPipeClientRegistrationCurrent(uint64_t client_id, UINT pipe_role, uint64_t registration_id)
@@ -1295,12 +1260,15 @@ void ShutdownPipeClients()
     }
 
     std::vector<std::shared_ptr<PipeEndpoint>> endpoints_to_shutdown;
+    std::vector<std::shared_ptr<VoiceFinalServer::PendingRegistry>> pending_to_retire;
     std::vector<HANDLE> main_control_pipes_to_disconnect;
     {
         std::lock_guard lock(g_pipe_clients_mutex);
         for (auto &[client_id, session] : g_pipe_clients)
         {
             (void)client_id;
+            if (session.voice_pending)
+                pending_to_retire.push_back(std::move(session.voice_pending));
             if (session.main_control_pipe && session.main_control_pipe != INVALID_HANDLE_VALUE)
             {
                 main_control_pipes_to_disconnect.push_back(session.main_control_pipe);
@@ -1320,6 +1288,8 @@ void ShutdownPipeClients()
     }
     g_pipe_clients_cv.notify_all();
 
+    for (const auto &pending : pending_to_retire)
+        pending->CompleteConnection();
     ShutdownEndpoints(std::move(endpoints_to_shutdown));
     for (HANDLE main_control_pipe : main_control_pipes_to_disconnect)
     {
@@ -1544,41 +1514,56 @@ bool SendWorkerPackets(uint64_t client_id, uint64_t activation_epoch, bool requi
     bool write_succeeded = false;
     bool failed_endpoint_removed = false;
     uint64_t invalidation_epoch = 0;
+    uint64_t registration = 0;
     UINT failed_msg_type = packets.front().msg_type;
     {
         std::lock_guard lock(g_pipe_clients_mutex);
-        auto it = g_pipe_clients.find(client_id);
-        const bool route_is_current = !require_active || g_active_client_state.matches(client_id, activation_epoch);
-        if (client_id != 0 && route_is_current && it != g_pipe_clients.end() && it->second.to_tsf_worker_thread_pipe &&
-            it->second.to_tsf_worker_thread_registration_id != 0 && it->second.to_tsf_worker_thread_ready)
+        const auto it = g_pipe_clients.find(client_id);
+        if (client_id != 0 && (!require_active || g_active_client_state.matches(client_id, activation_epoch)) &&
+            it != g_pipe_clients.end() && it->second.to_tsf_worker_thread_ready)
         {
             endpoint = it->second.to_tsf_worker_thread_pipe;
-            write_succeeded = true;
-            for (const auto &packet : packets)
-            {
-                if (!endpoint->Write(&packet, sizeof(packet), bytes_written, write_error))
-                {
-                    write_succeeded = false;
-                    failed_msg_type = packet.msg_type;
-                    const FanyImeIpc::ActiveClientTransition active = g_active_client_state.snapshot();
-                    it->second.to_tsf_worker_thread_pipe.reset();
-                    it->second.to_tsf_worker_thread_registration_id = 0;
-                    it->second.to_tsf_worker_thread_ready = false;
-                    it->second.outbound_state.mark_failed(FanyImeIpc::OutboundRoute::Worker);
-                    if (active.client_id == client_id)
-                    {
-                        invalidation_epoch = g_active_client_state.invalidate(client_id, active.epoch);
-                        if (invalidation_epoch != 0)
-                        {
-                            it->second.inactive_focus_token = it->second.focus_token;
-                            it->second.focus_token = 0;
-                        }
-                    }
-                    failed_endpoint_removed = true;
-                    break;
-                }
-            }
+            registration = it->second.to_tsf_worker_thread_registration_id;
         }
+    }
+    if (endpoint && registration != 0)
+    {
+        write_succeeded = endpoint->WithCurrentRoute(
+            g_pipe_clients_mutex,
+            [&] {
+                const auto it = g_pipe_clients.find(client_id);
+                return (!require_active || g_active_client_state.matches(client_id, activation_epoch)) &&
+                       it != g_pipe_clients.end() && it->second.to_tsf_worker_thread_pipe == endpoint &&
+                       it->second.to_tsf_worker_thread_registration_id == registration &&
+                       it->second.to_tsf_worker_thread_ready;
+            },
+            [&] {
+                auto &state = g_pipe_clients.at(client_id);
+                for (const auto &packet : packets)
+                {
+                    if (!endpoint->WriteLocked(&packet, sizeof(packet), bytes_written, write_error))
+                    {
+                        failed_msg_type = packet.msg_type;
+                        const auto active = g_active_client_state.snapshot();
+                        state.to_tsf_worker_thread_pipe.reset();
+                        state.to_tsf_worker_thread_registration_id = 0;
+                        state.to_tsf_worker_thread_ready = false;
+                        state.outbound_state.mark_failed(FanyImeIpc::OutboundRoute::Worker);
+                        if (active.client_id == client_id)
+                        {
+                            invalidation_epoch = g_active_client_state.invalidate(client_id, active.epoch);
+                            if (invalidation_epoch != 0)
+                            {
+                                state.inactive_focus_token = state.focus_token;
+                                state.focus_token = 0;
+                            }
+                        }
+                        failed_endpoint_removed = true;
+                        return false;
+                    }
+                }
+                return true;
+            });
     }
 
     if (!endpoint)
@@ -1617,65 +1602,7 @@ bool SendWorkerPacket(uint64_t client_id, uint64_t activation_epoch, bool requir
     }
     LogPipeWriteTarget(L"to-tsf-worker", client_id, msg_type, pipe_data);
 
-    std::shared_ptr<PipeEndpoint> endpoint;
-    DWORD bytes_written = 0;
-    DWORD write_error = ERROR_SUCCESS;
-    bool write_succeeded = false;
-    bool failed_endpoint_removed = false;
-    uint64_t invalidation_epoch = 0;
-    {
-        std::lock_guard lock(g_pipe_clients_mutex);
-        auto it = g_pipe_clients.find(client_id);
-        const bool route_is_current = !require_active || g_active_client_state.matches(client_id, activation_epoch);
-        if (client_id != 0 && route_is_current && it != g_pipe_clients.end() && it->second.to_tsf_worker_thread_pipe &&
-            it->second.to_tsf_worker_thread_registration_id != 0 && it->second.to_tsf_worker_thread_ready)
-        {
-            endpoint = it->second.to_tsf_worker_thread_pipe;
-            write_succeeded = endpoint->Write(&packet, sizeof(packet), bytes_written, write_error);
-            if (!write_succeeded)
-            {
-                const FanyImeIpc::ActiveClientTransition active = g_active_client_state.snapshot();
-                it->second.to_tsf_worker_thread_pipe.reset();
-                it->second.to_tsf_worker_thread_registration_id = 0;
-                it->second.to_tsf_worker_thread_ready = false;
-                it->second.outbound_state.mark_failed(FanyImeIpc::OutboundRoute::Worker);
-                if (active.client_id == client_id)
-                {
-                    invalidation_epoch = g_active_client_state.invalidate(client_id, active.epoch);
-                    if (invalidation_epoch != 0)
-                    {
-                        it->second.inactive_focus_token = it->second.focus_token;
-                        it->second.focus_token = 0;
-                    }
-                }
-                failed_endpoint_removed = true;
-            }
-        }
-    }
-
-    if (!endpoint)
-    {
-#ifdef FANY_DEBUG
-        (void)0;
-#endif
-        LogPipeDisconnected(L"to-tsf-worker", msg_type);
-        return false;
-    }
-    if (!write_succeeded)
-    {
-#ifdef FANY_DEBUG
-        (void)0;
-#endif
-        LogPipeWriteFailure(L"to-tsf-worker", msg_type, write_error, bytes_written, sizeof(packet));
-        if (failed_endpoint_removed)
-        {
-            endpoint->Shutdown();
-            g_pipe_clients_cv.notify_all();
-            FanyNamedPipe::EnqueuePipeSessionInvalidatedTask(client_id, invalidation_epoch);
-        }
-        return false;
-    }
-    return true;
+    return SendWorkerPackets(client_id, activation_epoch, require_active, {packet});
 }
 } // namespace
 
@@ -1719,6 +1646,220 @@ bool SendVoiceCompositionToTsfWorker(uint64_t client_id, uint64_t activation_epo
         packets.push_back(packet);
     }
     return SendWorkerPackets(client_id, activation_epoch, true, packets);
+}
+
+namespace
+{
+bool VoiceFinalRouteCurrentLocked(const PipeClientSession &session, const VoiceFinalIpc::Channel &channel)
+{
+    return channel.client_id != 0 && channel.activation_epoch != 0 && channel.focus_token != 0 &&
+           channel.connection_generation != 0 && channel.delivery_id != 0 && channel.pending &&
+           !session.protocol.legacy && (session.protocol.capabilities & FanyImeProtocol::VoiceDeliveryAck) != 0 &&
+           session.to_tsf_worker_thread_pipe && session.to_tsf_worker_thread_ready &&
+           session.to_tsf_worker_thread_registration_id == channel.connection_generation && session.voice_pending &&
+           session.voice_pending->connection_generation() == channel.connection_generation &&
+           session.focus_token == channel.focus_token &&
+           g_active_client_state.matches(channel.client_id, channel.activation_epoch);
+}
+
+VoiceFinalIpc::SendStatus WriteVoiceFinalBatch(
+    const VoiceFinalIpc::Channel &channel,
+    const std::vector<std::array<std::uint8_t, FanyImeVoiceFinal::kPacketBytes>> &frames,
+    bool counts_as_user_text = true)
+{
+    if (frames.empty() || !channel.pending || (counts_as_user_text && channel.pending->completed()) ||
+        GetTickCount64() >= channel.deadline_tick)
+    {
+        if (channel.pending)
+            channel.pending->Complete(VoiceFinalServer::AckResult::RejectedNoWrite);
+        return VoiceFinalIpc::SendStatus::NoWrite;
+    }
+
+    std::shared_ptr<PipeEndpoint> endpoint;
+    {
+        // Only snapshot the endpoint here. The batch write uses the endpoint's own
+        // serialization lock, so a slow/backpressured worker never makes routing or
+        // send-lock waiters hold g_pipe_clients_mutex.
+        std::lock_guard lock(g_pipe_clients_mutex);
+        const auto it = g_pipe_clients.find(channel.client_id);
+        if (it != g_pipe_clients.end() && VoiceFinalRouteCurrentLocked(it->second, channel))
+            endpoint = it->second.to_tsf_worker_thread_pipe;
+    }
+    if (!endpoint)
+    {
+        channel.pending->Complete(VoiceFinalServer::AckResult::RejectedNoWrite);
+        return VoiceFinalIpc::SendStatus::NoWrite;
+    }
+
+    // Publish uncertainty before writing: cancellation can wake the waiter while
+    // this batch is in flight. Only the DLL's explicit ACK can prove NoWrite then.
+    if (counts_as_user_text && !channel.pending->MarkMayHaveWritten())
+        return VoiceFinalIpc::SendStatus::NoWrite;
+    const PipeEndpoint::BatchResult batch = endpoint->WriteBatch(frames, channel.deadline_tick);
+    std::shared_ptr<VoiceFinalServer::PendingRegistry> retired_pending;
+
+    bool endpoint_current = false;
+    bool endpoint_removed = false;
+    uint64_t invalidation_epoch = 0;
+    if (!batch.complete)
+    {
+        std::lock_guard lock(g_pipe_clients_mutex);
+        auto it = g_pipe_clients.find(channel.client_id);
+        if (it != g_pipe_clients.end() && it->second.to_tsf_worker_thread_pipe == endpoint &&
+            it->second.to_tsf_worker_thread_registration_id == channel.connection_generation)
+        {
+            const FanyImeIpc::ActiveClientTransition active = g_active_client_state.snapshot();
+            it->second.to_tsf_worker_thread_pipe.reset();
+            retired_pending = std::move(it->second.voice_pending);
+            it->second.to_tsf_worker_thread_registration_id = 0;
+            it->second.to_tsf_worker_thread_ready = false;
+            it->second.outbound_state.mark_failed(FanyImeIpc::OutboundRoute::Worker);
+            if (active.client_id == channel.client_id)
+            {
+                invalidation_epoch = g_active_client_state.invalidate(channel.client_id, active.epoch);
+                if (invalidation_epoch != 0)
+                {
+                    it->second.inactive_focus_token = it->second.focus_token;
+                    it->second.focus_token = 0;
+                }
+            }
+            endpoint_removed = true;
+        }
+    }
+    else
+    {
+        std::lock_guard lock(g_pipe_clients_mutex);
+        const auto it = g_pipe_clients.find(channel.client_id);
+        endpoint_current = it != g_pipe_clients.end() && it->second.to_tsf_worker_thread_pipe == endpoint &&
+                           VoiceFinalRouteCurrentLocked(it->second, channel);
+    }
+
+    if (batch.complete && endpoint_current)
+        return VoiceFinalIpc::SendStatus::Complete;
+
+    channel.pending->Complete(batch.any_bytes ? VoiceFinalServer::AckResult::UnknownOrPartial
+                                              : VoiceFinalServer::AckResult::RejectedNoWrite);
+    if (retired_pending)
+        retired_pending->CompleteConnection();
+    if (endpoint_removed)
+    {
+        endpoint->Shutdown();
+        g_pipe_clients_cv.notify_all();
+        FanyNamedPipe::EnqueuePipeSessionInvalidatedTask(channel.client_id, invalidation_epoch);
+    }
+    LogPipeWriteFailure(L"to-tsf-worker", FanyImeVoiceFinal::kOpcode, batch.error, batch.bytes_written,
+                        static_cast<DWORD>(FanyImeVoiceFinal::kPacketBytes));
+    return batch.any_bytes ? VoiceFinalIpc::SendStatus::Partial : VoiceFinalIpc::SendStatus::NoWrite;
+}
+
+} // namespace
+
+VoiceFinalIpc::OpenResult VoiceFinalIpc::Open(uint64_t client_id, uint64_t activation_epoch, uint64_t focus_token,
+                                              uint64_t deadline_tick)
+{
+    OpenResult result;
+    if (client_id == 0 || activation_epoch == 0 || focus_token == 0 || deadline_tick == 0 ||
+        GetTickCount64() >= deadline_tick)
+        return result;
+
+    std::lock_guard lock(g_pipe_clients_mutex);
+    const auto it = g_pipe_clients.find(client_id);
+    if (it == g_pipe_clients.end() || !it->second.to_tsf_worker_thread_pipe || !it->second.to_tsf_worker_thread_ready ||
+        it->second.to_tsf_worker_thread_registration_id == 0 ||
+        !g_active_client_state.matches(client_id, activation_epoch))
+    {
+        return result;
+    }
+    if (it->second.protocol.legacy || (it->second.protocol.capabilities & FanyImeProtocol::VoiceDeliveryAck) == 0)
+    {
+        result.status = OpenStatus::Unsupported;
+        return result;
+    }
+    if (!it->second.voice_pending || it->second.focus_token != focus_token)
+        return result;
+
+    uint64_t delivery_id = g_next_voice_delivery_id.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (delivery_id == 0)
+        delivery_id = g_next_voice_delivery_id.fetch_add(1, std::memory_order_relaxed) + 1;
+    auto pending = it->second.voice_pending->Register(delivery_id, focus_token, deadline_tick);
+    if (!pending)
+        return result;
+
+    result.status = OpenStatus::Ready;
+    result.channel.client_id = client_id;
+    result.channel.activation_epoch = activation_epoch;
+    result.channel.focus_token = focus_token;
+    result.channel.connection_generation = it->second.to_tsf_worker_thread_registration_id;
+    result.channel.delivery_id = delivery_id;
+    result.channel.deadline_tick = deadline_tick;
+    result.channel.pending = std::move(pending);
+    result.channel.registry = it->second.voice_pending;
+    return result;
+}
+
+VoiceFinalIpc::SendStatus VoiceFinalIpc::SendPreview(const Channel &channel, uint64_t revision,
+                                                     const std::u16string &text)
+{
+    if (!channel || channel.pending->completed() || channel.deadline_tick == 0 ||
+        GetTickCount64() >= channel.deadline_tick || text.empty() || text.size() > FanyImeVoiceFinal::kMaxTextUnits)
+        return SendStatus::NoWrite;
+    std::vector<std::array<std::uint8_t, FanyImeVoiceFinal::kPacketBytes>> frames;
+    if (!FanyImeVoiceFinal::EncodeTextFrames(channel.delivery_id, channel.focus_token, revision, channel.deadline_tick,
+                                             FanyImeVoiceFinal::Operation::Preview, text, frames))
+    {
+        return SendStatus::NoWrite;
+    }
+    if (!channel.pending->PreparePreviewRevision(revision))
+        return SendStatus::NoWrite;
+    return WriteVoiceFinalBatch(channel, frames);
+}
+
+VoiceFinalIpc::SendStatus VoiceFinalIpc::SendFinal(const Channel &channel, uint64_t revision,
+                                                   FanyImeVoiceFinal::Operation operation, const std::u16string &text)
+{
+    if (operation != FanyImeVoiceFinal::Operation::Insert &&
+        operation != FanyImeVoiceFinal::Operation::CommitComposition)
+    {
+        return SendStatus::NoWrite;
+    }
+    if (!channel || channel.pending->completed() || channel.deadline_tick == 0 ||
+        GetTickCount64() >= channel.deadline_tick || text.empty() || text.size() > FanyImeVoiceFinal::kMaxTextUnits)
+        return SendStatus::NoWrite;
+    std::vector<std::array<std::uint8_t, FanyImeVoiceFinal::kPacketBytes>> frames;
+    if (!FanyImeVoiceFinal::EncodeTextFrames(channel.delivery_id, channel.focus_token, revision, channel.deadline_tick,
+                                             operation, text, frames))
+    {
+        return SendStatus::NoWrite;
+    }
+    if (!channel.pending->SealFinalRevision(revision))
+        return SendStatus::NoWrite;
+    return WriteVoiceFinalBatch(channel, frames);
+}
+
+bool VoiceFinalIpc::SendCancel(const Channel &channel)
+{
+    if (!channel)
+        return false;
+    // Wake before acquiring the endpoint lock; UI cancellation must never wait
+    // behind a backpressured writer. Exact cleanup remains legal after completion.
+    Abandon(channel);
+    Channel cleanup = channel;
+    cleanup.deadline_tick = GetTickCount64() + 1000;
+    const uint64_t deadline = cleanup.deadline_tick;
+    std::array<std::uint8_t, FanyImeVoiceFinal::kPacketBytes> frame{};
+    if (!FanyImeVoiceFinal::EncodeCancelFrame(channel.delivery_id, channel.focus_token, channel.pending->revision(),
+                                              deadline, frame))
+        return false;
+    std::vector<std::array<std::uint8_t, FanyImeVoiceFinal::kPacketBytes>> frames{frame};
+    return WriteVoiceFinalBatch(cleanup, frames, false) == SendStatus::Complete;
+}
+
+void VoiceFinalIpc::Abandon(const Channel &channel)
+{
+    if (channel.pending)
+        channel.pending->Complete(VoiceFinalServer::AckResult::RejectedNoWrite);
+    if (channel.registry)
+        channel.registry->Retire(channel.delivery_id, channel.focus_token);
 }
 
 void SendToTsfViaNamedpipe(UINT msg_type, const std::wstring &pipeData)

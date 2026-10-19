@@ -1719,6 +1719,10 @@ Exit:
 
 HRESULT CMetasequoiaIME::_RemoveDummyCompositionForComposing(TfEditCookie ec, _In_ ITfComposition *pComposition)
 {
+    // A final voice write may already be visible even when its acknowledgement is Unknown.
+    // Transport reset can end that exact composition, but must never erase or replay its text.
+    if (_ShouldPreserveVoiceComposition(pComposition)) return S_FALSE;
+
     HRESULT hr = S_OK;
 
     ITfRange *pRange = nullptr;

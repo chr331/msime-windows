@@ -2,10 +2,12 @@
 
 #include "ipc_protocol_limits.h"
 #include "voice_composition_pipe.h"
+#include "voice_final_pending.h"
 
 #include <Windows.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -133,7 +135,72 @@ bool ClientNegotiatedCaretStateIndicator(uint64_t client_id);
 bool ClientNegotiatedTrilingualCycle(uint64_t client_id);
 bool ClientNegotiatedInputStateShortcuts(uint64_t client_id);
 bool ClientNegotiatedTemporaryJapanese(uint64_t client_id);
+// True only for a versioned client that negotiated the optional final-delivery
+// acknowledgement capability. Legacy clients never advertise it.
+bool ClientNegotiatedVoiceDeliveryAck(uint64_t client_id);
 uint64_t RegisterToTsfWorkerThreadPipeClient(uint64_t client_id, HANDLE pipe);
+// Captures the ACK registry belonging to this exact worker registration. The
+// reverse-pipe monitor consumes ACKs through it and retires it on disconnect.
+std::shared_ptr<VoiceFinalServer::PendingRegistry> GetVoicePendingRegistry(uint64_t client_id,
+                                                                           uint64_t registration_id);
+
+// Narrow server-side final voice transport. VoiceInputService only receives a
+// value channel and a pending completion object; the worker endpoint, routing
+// locks and pipe handles stay inside ipc.cpp. No call waits for an ACK while
+// holding a routing or endpoint lock.
+namespace VoiceFinalIpc
+{
+enum class OpenStatus
+{
+    Ready,
+    Unsupported,
+    Unavailable,
+};
+
+struct Channel
+{
+    std::uint64_t client_id = 0;
+    std::uint64_t activation_epoch = 0;
+    std::uint64_t focus_token = 0;
+    std::uint64_t connection_generation = 0;
+    std::uint64_t delivery_id = 0;
+    std::uint64_t deadline_tick = 0;
+    std::shared_ptr<VoiceFinalServer::Pending> pending;
+    std::shared_ptr<VoiceFinalServer::PendingRegistry> registry;
+
+    explicit operator bool() const
+    {
+        return pending != nullptr;
+    }
+};
+
+struct OpenResult
+{
+    OpenStatus status = OpenStatus::Unavailable;
+    Channel channel;
+};
+
+enum class SendStatus
+{
+    Complete,
+    NoWrite,
+    Partial,
+};
+
+OpenResult Open(uint64_t client_id, uint64_t activation_epoch, uint64_t focus_token, uint64_t deadline_tick);
+// Preview and final use the same delivery id established by Open. Each call is
+// one non-interleaved 404-byte message batch. The owner serializes revisions;
+// a failed batch retires the connection rather than retrying an uncertain prefix.
+SendStatus SendPreview(const Channel &channel, uint64_t revision, const std::u16string &text);
+SendStatus SendFinal(const Channel &channel, uint64_t revision, FanyImeVoiceFinal::Operation operation,
+                     const std::u16string &text);
+// Targeted cleanup for this exact owner. It never falls back to the global
+// voice-composition cancel and never creates a different delivery.
+bool SendCancel(const Channel &channel);
+// Best-effort immediate retirement for paths that cannot write at all.
+void Abandon(const Channel &channel);
+} // namespace VoiceFinalIpc
+
 uint64_t BeginPipeClientHandler(HANDLE pipe);
 void EndPipeClientHandler(uint64_t handler_id);
 struct PipeClientActivation

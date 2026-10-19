@@ -1,6 +1,9 @@
 #include "wave_overlay.h"
 #include "mvi_utils.h"
+#include "voice_clipboard.h"
+#ifndef MSIME_VOICE_OVERLAY_TEST_HOOKS
 #include "config/ime_config.h"
+#endif
 
 #include <d2d1.h>
 #include <d2d1helper.h>
@@ -16,13 +19,31 @@ constexpr wchar_t kClassName[] = L"MviWaveOverlayWindow";
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kTimerMs = 16;
 constexpr UINT kTranscriptChangedMessage = WM_APP + 186;
+constexpr UINT kRecoveryChangedMessage = WM_APP + 187;
+constexpr UINT kRecoveryClearMessage = WM_APP + 188;
+constexpr UINT kFinishRecognitionMessage = WM_APP + 189;
 constexpr UINT kAnchorChangedMessage = WM_APP + 192;
+constexpr UINT kRecoveryDismissMessage = WM_APP + 193;
+constexpr UINT kShowMessage = WM_APP + 194;
+constexpr UINT kHideMessage = WM_APP + 195;
+constexpr UINT kRecoveryAuthoritativeDismissMessage = WM_APP + 196;
+constexpr UINT_PTR kRecoveryCloseTimerIdBase = 2;
+constexpr UINT kRecoveryCloseDelayMs = 1000;
 constexpr int kCompactWidth = 78;
 constexpr int kCompactHeight = 32;
 constexpr int kProcessingWidth = 112;
 constexpr int kProcessingHeight = 40;
 constexpr int kActionWidth = 142;
 constexpr int kActionHeight = 40;
+constexpr int kRecoveryWidth = 264;
+constexpr int kRecoveryHeight = 86;
+constexpr float kRecoveryCloseCenterX = 28.0f;
+constexpr float kRecoveryCloseCenterY = 58.0f;
+constexpr float kRecoveryCloseRadius = 16.0f;
+constexpr float kRecoveryCopyLeft = 58.0f;
+constexpr float kRecoveryCopyTop = 42.0f;
+constexpr float kRecoveryCopyRight = 252.0f;
+constexpr float kRecoveryCopyBottom = 74.0f;
 constexpr float kActionCenterInset = 18.0f;
 constexpr float kActionRadius = 12.0f;
 constexpr int kTranscriptWidth = kVoiceOverlayPreferredWidthDip;
@@ -43,6 +64,10 @@ template <typename T> void safe_release(T **obj)
         *obj = nullptr;
     }
 }
+
+#ifdef MSIME_VOICE_OVERLAY_TEST_HOOKS
+std::function<void()> g_finish_recognition_ui_test_hook;
+#endif
 } // namespace
 
 WaveOverlay::WaveOverlay()
@@ -63,7 +88,7 @@ WaveOverlay::~WaveOverlay()
     shutdown();
 }
 
-bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_handler)
+bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_handler, ClipboardWriter clipboard_writer)
 {
     if (hwnd_)
     {
@@ -72,6 +97,7 @@ bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_ha
 
     instance_ = instance;
     action_handler_ = std::move(action_handler);
+    clipboard_writer_ = std::move(clipboard_writer);
 
     const HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory_);
     if (FAILED(hr))
@@ -144,6 +170,23 @@ bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_ha
 void WaveOverlay::shutdown()
 {
     post_hwnd_.store(nullptr, std::memory_order_release);
+    session_fence_.store(0, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        recovery_active_ = false;
+        recovery_session_ = 0;
+        ++recovery_generation_;
+        recovery_text_.clear();
+    }
+    recovery_mode_ = false;
+    recovery_feedback_ = RecoveryFeedback::None;
+    recovery_timer_id_ = 0;
+    recovery_timer_session_ = 0;
+    recovery_timer_generation_ = 0;
+    recovery_shown_session_ = 0;
+    recovery_shown_generation_ = 0;
+    pressed_recovery_session_ = 0;
+    pressed_recovery_generation_ = 0;
     if (hwnd_)
     {
         DestroyWindow(hwnd_);
@@ -158,32 +201,253 @@ void WaveOverlay::shutdown()
     safe_release(&factory_);
 }
 
+void WaveOverlay::show_window()
+{
+    // UI thread only. Background callers post kShowMessage/kRecoveryChangedMessage instead of
+    // entering this path, so SetWindowPos/ShowWindow never synchronously waits on the UI thread.
+    if (!hwnd_)
+        return;
+
+#ifndef MSIME_VOICE_OVERLAY_TEST_HOOKS
+    ReloadImeConfigIfChanged();
+    const bool light_theme = ResolveConfiguredTheme(GetConfiguredThemeVoice()) == "light";
+#else
+    const bool light_theme = false;
+#endif
+    if (light_theme != light_theme_)
+    {
+        light_theme_ = light_theme;
+        release_render_target();
+    }
+    // 每次显示时根据当前显示器重新定位
+    update_window_bounds();
+
+    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+    UpdateWindow(hwnd_);
+}
+
 void WaveOverlay::show()
 {
-    if (hwnd_)
-    {
-        ReloadImeConfigIfChanged();
-        const bool light_theme = ResolveConfiguredTheme(GetConfiguredThemeVoice()) == "light";
-        if (light_theme != light_theme_)
-        {
-            light_theme_ = light_theme;
-            release_render_target();
-        }
-        // 每次显示时根据当前显示器重新定位
-        update_window_bounds();
-
-        ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-        UpdateWindow(hwnd_);
-    }
+    const HWND hwnd = post_hwnd_.load(std::memory_order_acquire);
+    if (!hwnd)
+        return;
+    const std::uint64_t session = session_fence_.load(std::memory_order_acquire);
+    PostMessageW(hwnd, kShowMessage, 0, static_cast<LPARAM>(session));
 }
 
 void WaveOverlay::hide()
 {
-    if (hwnd_)
+    const HWND hwnd = post_hwnd_.load(std::memory_order_acquire);
+    if (!hwnd)
+        return;
+    const std::uint64_t session = session_fence_.load(std::memory_order_acquire);
+    PostMessageW(hwnd, kHideMessage, 0, static_cast<LPARAM>(session));
+}
+
+bool WaveOverlay::show_recovery(std::uint64_t session, const std::wstring &text)
+{
+    const HWND hwnd = post_hwnd_.load(std::memory_order_acquire);
+    if (!hwnd || session == 0 || text.empty())
+        return false;
+
+    // Unified generation gate: a delayed result for an older recording cannot revive a retained
+    // surface after a newer session has become current. This is a monotonic atomic update, not a
+    // wait on the UI thread; window application itself remains a posted UI-thread message.
+    std::uint64_t fence = session_fence_.load(std::memory_order_acquire);
+    while (session > fence &&
+           !session_fence_.compare_exchange_weak(fence, session, std::memory_order_acq_rel, std::memory_order_acquire))
     {
-        ShowWindow(hwnd_, SW_HIDE);
+    }
+    if (session < fence || !post_hwnd_.load(std::memory_order_acquire))
+        return false;
+
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> recovery_lock(recovery_mutex_);
+        recovery_active_ = true;
+        recovery_session_ = session;
+        recovery_text_ = text;
+        generation = ++recovery_generation_;
+    }
+    if (PostMessageW(hwnd, kRecoveryChangedMessage, 0, 0))
+        return true;
+
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    if (recovery_generation_ == generation)
+    {
+        recovery_active_ = false;
+        recovery_session_ = 0;
+        recovery_text_.clear();
+    }
+    return false;
+}
+
+bool WaveOverlay::dismiss_recovery(std::uint64_t session)
+{
+    const HWND hwnd = post_hwnd_.load(std::memory_order_acquire);
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (!recovery_active_ || recovery_session_ != session)
+            return false;
+        generation = recovery_generation_;
+        recovery_active_ = false;
+        recovery_session_ = 0;
+        ++recovery_generation_;
+        recovery_text_.clear();
+    }
+    // The model is already gone. This authoritative close must also hide an older generation
+    // that is still on screen while a newer generation was published but not applied yet.
+    if (hwnd)
+        PostMessageW(hwnd, kRecoveryAuthoritativeDismissMessage, static_cast<WPARAM>(session),
+                     static_cast<LPARAM>(generation));
+    return true;
+}
+
+void WaveOverlay::set_session(std::uint64_t session)
+{
+    // Nonblocking monotonic fence: this may be called while service state locks are held. UI
+    // messages reconcile against it, so no lock is ever held across a Win32 call.
+    std::uint64_t fence = session_fence_.load(std::memory_order_acquire);
+    while (session > fence &&
+           !session_fence_.compare_exchange_weak(fence, session, std::memory_order_acq_rel, std::memory_order_acquire))
+    {
     }
 }
+
+void WaveOverlay::clear_recovery()
+{
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        recovery_active_ = false;
+        recovery_session_ = 0;
+        generation = ++recovery_generation_;
+        recovery_text_.clear();
+    }
+    if (HWND hwnd = post_hwnd_.load(std::memory_order_acquire))
+        PostMessageW(hwnd, kRecoveryClearMessage, 0, static_cast<LPARAM>(generation));
+}
+
+bool WaveOverlay::recovery_active_for(std::uint64_t session) const
+{
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    return recovery_active_ && recovery_session_ == session;
+}
+
+void WaveOverlay::show_ordinary_ui(std::uint64_t session)
+{
+    if (session == 0 || session_fence_.load(std::memory_order_acquire) != session)
+        return;
+
+    bool keep_recovery = false;
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (recovery_active_)
+        {
+            if (recovery_session_ >= session)
+            {
+                keep_recovery = true;
+            }
+            else
+            {
+                recovery_active_ = false;
+                recovery_session_ = 0;
+                ++recovery_generation_;
+                recovery_text_.clear();
+            }
+        }
+    }
+    if (keep_recovery)
+        return;
+    if (recovery_mode_)
+    {
+        if (recovery_shown_session_ >= session)
+            return;
+        clear_recovery_ui(0);
+    }
+    show_window();
+}
+
+void WaveOverlay::hide_ordinary_ui(std::uint64_t session)
+{
+    if (session == 0 || session_fence_.load(std::memory_order_acquire) != session)
+        return;
+
+    bool keep_recovery = false;
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (recovery_active_)
+        {
+            if (recovery_session_ >= session)
+            {
+                keep_recovery = true;
+            }
+            else
+            {
+                recovery_active_ = false;
+                recovery_session_ = 0;
+                ++recovery_generation_;
+                recovery_text_.clear();
+            }
+        }
+    }
+    if (keep_recovery)
+        return;
+    if (recovery_mode_ && recovery_shown_session_ >= session)
+        return;
+    if (recovery_mode_)
+        clear_recovery_ui(0);
+
+    // Ordinary hide is visual only. StopRecording posts the next Recognizing/Cancel/text state
+    // immediately afterwards, and this message may still be queued behind it; clearing those
+    // fields here would erase the state that belongs to the same session.
+    if (hwnd_)
+        ShowWindow(hwnd_, SW_HIDE);
+}
+
+bool WaveOverlay::clear_recovery_model(std::uint64_t session, std::uint64_t generation)
+{
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    if (!recovery_active_ || recovery_session_ != session || (generation != 0 && recovery_generation_ != generation))
+        return false;
+    recovery_active_ = false;
+    recovery_session_ = 0;
+    ++recovery_generation_;
+    recovery_text_.clear();
+    return true;
+}
+
+void WaveOverlay::finish_recognition(std::uint64_t session)
+{
+    if (HWND hwnd = post_hwnd_.load(std::memory_order_acquire))
+        PostMessageW(hwnd, kFinishRecognitionMessage, 0, static_cast<LPARAM>(session));
+}
+
+#ifdef MSIME_VOICE_OVERLAY_TEST_HOOKS
+std::wstring WaveOverlay::recovery_text_for_test() const
+{
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    return recovery_text_;
+}
+
+std::uint64_t WaveOverlay::recovery_generation_for_test() const
+{
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    return recovery_generation_;
+}
+
+void WaveOverlay::post_recovery_dismiss_for_test(std::uint64_t session, std::uint64_t generation)
+{
+    if (HWND hwnd = post_hwnd_.load(std::memory_order_acquire))
+        PostMessageW(hwnd, kRecoveryDismissMessage, static_cast<WPARAM>(session), static_cast<LPARAM>(generation));
+}
+
+void WaveOverlay::set_finish_recognition_ui_test_hook(std::function<void()> hook)
+{
+    g_finish_recognition_ui_test_hook = std::move(hook);
+}
+#endif
 
 void WaveOverlay::set_anchor(const VoiceOverlayAnchor &anchor)
 {
@@ -282,6 +546,10 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
             update_wave_levels();
             InvalidateRect(hwnd, nullptr, FALSE);
         }
+        else if (recovery_timer_id_ != 0 && wParam == recovery_timer_id_)
+        {
+            on_recovery_timer();
+        }
         return 0;
     case WM_SIZE:
         if (render_target_)
@@ -336,6 +604,8 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         {
             pressed_action_ = action;
             action_pressed_ = true;
+            pressed_recovery_session_ = recovery_mode_ ? recovery_shown_session_ : 0;
+            pressed_recovery_generation_ = recovery_mode_ ? recovery_shown_generation_ : 0;
             SetCapture(hwnd);
             return 0;
         }
@@ -349,8 +619,34 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         Action action{};
         if (hit_test_action(static_cast<float>(GET_X_LPARAM(lParam)) / scale_x_,
                             static_cast<float>(GET_Y_LPARAM(lParam)) / scale_y_, action) &&
-            action == pressed_action_ && action_handler_)
-            action_handler_(action);
+            action == pressed_action_)
+        {
+            if (recovery_mode_)
+            {
+                // Bind the click to the result generation that was on screen when the button
+                // went down. A newer recovery result must not be copied or closed by this click.
+                if (pressed_recovery_session_ == 0 || pressed_recovery_session_ != recovery_shown_session_ ||
+                    pressed_recovery_generation_ != recovery_shown_generation_)
+                    return 0;
+                if (action == Action::Copy)
+                {
+                    if (action_handler_)
+                        action_handler_(Action::Copy);
+                    on_recovery_copy(pressed_recovery_session_, pressed_recovery_generation_);
+                }
+                else if (action == Action::Close)
+                {
+                    if (action_handler_)
+                        action_handler_(Action::Close);
+                    clear_recovery_model(pressed_recovery_session_, pressed_recovery_generation_);
+                    dismiss_recovery_ui(pressed_recovery_session_, pressed_recovery_generation_);
+                }
+            }
+            else if (action_handler_)
+            {
+                action_handler_(action);
+            }
+        }
         return 0;
     }
     case WM_CAPTURECHANGED:
@@ -360,8 +656,20 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         // 右键一律当作取消。这个窗口是 WS_POPUP + WS_EX_NOACTIVATE，右键落在它
         // 上面本来就会被吃掉，前台应用的右键菜单也弹不出来；把它定义成取消，
         // 可以保证在任何状态下（按钮被隐藏时同样有效）都有一个鼠标退出通道。
-        if (action_handler_)
+        if (recovery_mode_)
+        {
+            if (action_handler_)
+                action_handler_(Action::Close);
+            if (recovery_shown_session_ != 0 && recovery_shown_generation_ != 0)
+            {
+                clear_recovery_model(recovery_shown_session_, recovery_shown_generation_);
+                dismiss_recovery_ui(recovery_shown_session_, recovery_shown_generation_);
+            }
+        }
+        else if (action_handler_)
+        {
             action_handler_(Action::Cancel);
+        }
         return 0;
     case kAnchorChangedMessage:
         update_window_bounds();
@@ -370,9 +678,33 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
     case kTranscriptChangedMessage:
         if (!actions_visible_.load())
             action_pressed_ = false;
-        release_text_layout();
-        update_window_bounds();
-        InvalidateRect(hwnd, nullptr, FALSE);
+        if (!recovery_mode_)
+        {
+            release_text_layout();
+            update_window_bounds();
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    case kShowMessage:
+        show_ordinary_ui(static_cast<std::uint64_t>(lParam));
+        return 0;
+    case kHideMessage:
+        hide_ordinary_ui(static_cast<std::uint64_t>(lParam));
+        return 0;
+    case kRecoveryChangedMessage:
+        apply_recovery_to_window();
+        return 0;
+    case kRecoveryClearMessage:
+        clear_recovery_ui(static_cast<std::uint64_t>(lParam));
+        return 0;
+    case kRecoveryDismissMessage:
+        dismiss_recovery_ui(static_cast<std::uint64_t>(wParam), static_cast<std::uint64_t>(lParam));
+        return 0;
+    case kRecoveryAuthoritativeDismissMessage:
+        dismiss_recovery_ui_authoritative(static_cast<std::uint64_t>(wParam), static_cast<std::uint64_t>(lParam));
+        return 0;
+    case kFinishRecognitionMessage:
+        finish_recognition_ui(static_cast<std::uint64_t>(lParam));
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
@@ -383,6 +715,7 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
     }
     case WM_DESTROY:
         KillTimer(hwnd, kTimerId);
+        cancel_recovery_close();
         post_hwnd_.store(nullptr, std::memory_order_release);
         release_render_target();
         return 0;
@@ -390,6 +723,229 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void WaveOverlay::apply_recovery_to_window()
+{
+    if (!hwnd_)
+        return;
+
+    bool active = false;
+    std::uint64_t session = 0;
+    std::uint64_t generation = 0;
+    std::wstring text;
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        active = recovery_active_ && !recovery_text_.empty();
+        session = recovery_session_;
+        generation = recovery_generation_;
+        text = recovery_text_;
+    }
+    // A queued notification is harmless after a newer session or generation has taken over. Do not
+    // clear whatever is already visible here: an authoritative dismiss owns that transition.
+    if (!active || session == 0 || text.empty() || session != session_fence_.load(std::memory_order_acquire))
+        return;
+
+    cancel_recovery_close();
+    if (action_pressed_)
+    {
+        // A click that began on the previous result cannot finish on this one.
+        ReleaseCapture();
+    }
+    recovery_mode_ = true;
+    recovery_feedback_ = RecoveryFeedback::None;
+    action_pressed_ = false;
+    pressed_recovery_session_ = 0;
+    pressed_recovery_generation_ = 0;
+    recovery_shown_session_ = session;
+    recovery_shown_generation_ = generation;
+    listening_.store(false);
+    input_level_.store(0.0f);
+    compact_status_.store(CompactStatus::None);
+    actions_visible_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(transcript_mutex_);
+        transcript_.clear();
+    }
+    release_text_layout();
+    update_window_bounds();
+    show_window();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void WaveOverlay::clear_recovery_ui(std::uint64_t generation)
+{
+    if (generation != 0)
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (recovery_generation_ != generation)
+            return;
+    }
+    cancel_recovery_close();
+    if (!recovery_mode_)
+        return;
+
+    recovery_mode_ = false;
+    recovery_feedback_ = RecoveryFeedback::None;
+    action_pressed_ = false;
+    pressed_recovery_session_ = 0;
+    pressed_recovery_generation_ = 0;
+    recovery_shown_session_ = 0;
+    recovery_shown_generation_ = 0;
+    release_text_layout();
+    update_window_bounds();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    if (hwnd_)
+        ShowWindow(hwnd_, SW_HIDE);
+}
+
+bool WaveOverlay::dismiss_recovery_ui(std::uint64_t session, std::uint64_t generation)
+{
+    // Visual-only dismissal, bound to the exact value that was visible. Any newer result that has
+    // already been published but not applied is left untouched and will be applied by its own message.
+    if (session == 0 || generation == 0 || !recovery_mode_ || recovery_shown_session_ != session ||
+        recovery_shown_generation_ != generation)
+        return false;
+    clear_recovery_ui(0);
+    return true;
+}
+
+bool WaveOverlay::dismiss_recovery_ui_authoritative(std::uint64_t session, std::uint64_t cleared_generation)
+{
+    // Public dismiss clears the model for the current session, while the message can arrive after
+    // a newer generation was published without being pumped. Hide every older screen generation of
+    // the same session, but never a newer result that appeared after the model was cleared.
+    if (session == 0 || cleared_generation == 0 || !recovery_mode_ || recovery_shown_session_ != session ||
+        recovery_shown_generation_ > cleared_generation)
+        return false;
+    clear_recovery_ui(0);
+    return true;
+}
+
+void WaveOverlay::finish_recognition_ui(std::uint64_t session)
+{
+#ifdef MSIME_VOICE_OVERLAY_TEST_HOOKS
+    if (g_finish_recognition_ui_test_hook)
+    {
+        auto hook = std::move(g_finish_recognition_ui_test_hook);
+        g_finish_recognition_ui_test_hook = {};
+        hook();
+    }
+#endif
+    // A delayed completion for session A must not hide session B or a retained result for A/B. The
+    // atomic fence is read on the UI thread; no service lock is involved and no Win32 call is made
+    // from a background thread.
+    hide_ordinary_ui(session);
+}
+
+void WaveOverlay::on_recovery_copy(std::uint64_t session, std::uint64_t generation)
+{
+    if (!recovery_mode_ || session == 0 || session != recovery_shown_session_ ||
+        generation != recovery_shown_generation_)
+        return;
+
+    std::wstring text;
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (!recovery_active_ || recovery_session_ != session || recovery_generation_ != generation)
+            return;
+        text = recovery_text_;
+    }
+    if (text.empty())
+        return;
+
+    const bool copied = clipboard_writer_ ? clipboard_writer_(hwnd_, session, text)
+                                          : VoiceInput::CopyUnicodeTextToClipboard(hwnd_, text);
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (!recovery_active_ || recovery_session_ != session || recovery_generation_ != generation)
+            return;
+    }
+    if (copied)
+    {
+        recovery_feedback_ = RecoveryFeedback::Copied;
+        schedule_recovery_close(session, generation);
+    }
+    else
+    {
+        // Keep the complete result and make the same action retryable. A failed attempt must not
+        // leave an older successful auto-close pending.
+        cancel_recovery_close();
+        recovery_feedback_ = RecoveryFeedback::Failed;
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void WaveOverlay::schedule_recovery_close(std::uint64_t session, std::uint64_t generation)
+{
+    cancel_recovery_close();
+    if (!hwnd_ || !recovery_mode_ || session != recovery_shown_session_ || generation != recovery_shown_generation_)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock(recovery_mutex_);
+        if (!recovery_active_ || recovery_session_ != session || recovery_generation_ != generation)
+            return;
+    }
+
+    if (next_recovery_timer_id_ == 0 || next_recovery_timer_id_ == kTimerId)
+        next_recovery_timer_id_ = kRecoveryCloseTimerIdBase;
+    const UINT_PTR timer_id = next_recovery_timer_id_++;
+    if (next_recovery_timer_id_ == 0 || next_recovery_timer_id_ == kTimerId)
+        next_recovery_timer_id_ = kRecoveryCloseTimerIdBase;
+
+    if (SetTimer(hwnd_, timer_id, kRecoveryCloseDelayMs, nullptr) == 0)
+        return; // Keep the success feedback visible; the close action remains available.
+
+    recovery_timer_id_ = timer_id;
+    recovery_timer_session_ = session;
+    recovery_timer_generation_ = generation;
+}
+
+void WaveOverlay::cancel_recovery_close()
+{
+    if (hwnd_ && recovery_timer_id_ != 0)
+        KillTimer(hwnd_, recovery_timer_id_);
+    recovery_timer_id_ = 0;
+    recovery_timer_session_ = 0;
+    recovery_timer_generation_ = 0;
+}
+
+void WaveOverlay::on_recovery_timer()
+{
+    if (recovery_timer_id_ == 0)
+        return;
+
+    const UINT_PTR timer_id = recovery_timer_id_;
+    const std::uint64_t session = recovery_timer_session_;
+    const std::uint64_t generation = recovery_timer_generation_;
+    recovery_timer_id_ = 0;
+    recovery_timer_session_ = 0;
+    recovery_timer_generation_ = 0;
+    if (hwnd_)
+        KillTimer(hwnd_, timer_id);
+
+    if (!recovery_mode_ || session != recovery_shown_session_ || generation != recovery_shown_generation_)
+        return;
+
+    const bool cleared = clear_recovery_model(session, generation);
+    const bool dismissed = dismiss_recovery_ui(session, generation);
+    if (cleared && dismissed && action_handler_)
+        action_handler_(Action::Close);
+}
+
+const wchar_t *WaveOverlay::recovery_copy_label() const
+{
+    switch (recovery_feedback_)
+    {
+    case RecoveryFeedback::Copied:
+        return L"已复制";
+    case RecoveryFeedback::Failed:
+        return L"重试复制";
+    case RecoveryFeedback::None:
+    default:
+        return L"复制全文";
+    }
 }
 
 bool WaveOverlay::ensure_render_target()
@@ -551,11 +1107,17 @@ void WaveOverlay::update_window_bounds()
     const bool has_compact_status = compact_status_.load() != CompactStatus::None;
     const bool has_actions = actions_visible_.load();
     const int logical_width =
-        has_actions ? kActionWidth
-                    : (has_compact_status ? kProcessingWidth : (has_transcript ? kTranscriptWidth : kCompactWidth));
+        recovery_mode_
+            ? kRecoveryWidth
+            : (has_actions
+                   ? kActionWidth
+                   : (has_compact_status ? kProcessingWidth : (has_transcript ? kTranscriptWidth : kCompactWidth)));
     const int logical_height =
-        has_actions ? kActionHeight
-                    : (has_compact_status ? kProcessingHeight : (has_transcript ? kTranscriptHeight : kCompactHeight));
+        recovery_mode_
+            ? kRecoveryHeight
+            : (has_actions
+                   ? kActionHeight
+                   : (has_compact_status ? kProcessingHeight : (has_transcript ? kTranscriptHeight : kCompactHeight)));
     const int width = static_cast<int>(std::lround(logical_width * scale_x_));
     const int height = static_cast<int>(std::lround(logical_height * scale_y_));
     RECT target = VoiceOverlayBottomAnchoredRect(anchor, width, height);
@@ -583,7 +1145,25 @@ void WaveOverlay::update_window_bounds()
 
 bool WaveOverlay::hit_test_action(float x, float y, Action &action) const
 {
-    if (!actions_visible_.load() || !hwnd_)
+    if (!hwnd_)
+        return false;
+    if (recovery_mode_)
+    {
+        const float close_dx = x - kRecoveryCloseCenterX;
+        const float close_dy = y - kRecoveryCloseCenterY;
+        if (close_dx * close_dx + close_dy * close_dy <= kRecoveryCloseRadius * kRecoveryCloseRadius)
+        {
+            action = Action::Close;
+            return true;
+        }
+        if (x >= kRecoveryCopyLeft && x <= kRecoveryCopyRight && y >= kRecoveryCopyTop && y <= kRecoveryCopyBottom)
+        {
+            action = Action::Copy;
+            return true;
+        }
+        return false;
+    }
+    if (!actions_visible_.load())
         return false;
     RECT rc{};
     GetClientRect(hwnd_, &rc);
@@ -694,6 +1274,37 @@ void WaveOverlay::draw()
     const D2D1_ROUNDED_RECT panel = D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, w - 0.5f, h - 0.5f), corner, corner);
     render_target_->FillRoundedRectangle(panel, bg_brush_);
     render_target_->DrawRoundedRectangle(panel, border_brush_, 1.0f);
+
+    if (recovery_mode_)
+    {
+        constexpr wchar_t title[] = L"转录已保留";
+        render_target_->DrawTextW(title, static_cast<UINT32>(wcslen(title)), processing_text_format_,
+                                  D2D1::RectF(0.0f, 5.0f, w, 37.0f), text_brush_);
+
+        render_target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(kRecoveryCloseCenterX, kRecoveryCloseCenterY),
+                                                  kRecoveryCloseRadius, kRecoveryCloseRadius),
+                                    action_bg_brush_);
+        constexpr float close_half = 3.5f;
+        render_target_->DrawLine(D2D1::Point2F(kRecoveryCloseCenterX - close_half, kRecoveryCloseCenterY - close_half),
+                                 D2D1::Point2F(kRecoveryCloseCenterX + close_half, kRecoveryCloseCenterY + close_half),
+                                 text_brush_, 1.6f);
+        render_target_->DrawLine(D2D1::Point2F(kRecoveryCloseCenterX + close_half, kRecoveryCloseCenterY - close_half),
+                                 D2D1::Point2F(kRecoveryCloseCenterX - close_half, kRecoveryCloseCenterY + close_half),
+                                 text_brush_, 1.6f);
+
+        const D2D1_ROUNDED_RECT copy_button = D2D1::RoundedRect(
+            D2D1::RectF(kRecoveryCopyLeft, kRecoveryCopyTop, kRecoveryCopyRight, kRecoveryCopyBottom), 10.0f, 10.0f);
+        render_target_->FillRoundedRectangle(copy_button, action_bg_brush_);
+        const wchar_t *label = recovery_copy_label();
+        render_target_->DrawTextW(
+            label, static_cast<UINT32>(wcslen(label)), processing_text_format_,
+            D2D1::RectF(kRecoveryCopyLeft, kRecoveryCopyTop, kRecoveryCopyRight, kRecoveryCopyBottom), text_brush_);
+
+        const HRESULT recovery_hr = render_target_->EndDraw();
+        if (recovery_hr == D2DERR_RECREATE_TARGET)
+            release_render_target();
+        return;
+    }
 
     if (has_compact_status)
     {

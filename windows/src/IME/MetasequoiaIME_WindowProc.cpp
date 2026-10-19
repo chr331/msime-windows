@@ -334,8 +334,11 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
         SetTimer(hWnd, TIMER_CONNECT_TO_TSF_NAMEDPIPE, CONNECT_NAMEDPIPE_RETRY_INTERVAL_MS, nullptr);
         break;
     }
+    case WM_VoiceDelivery:
+        pIME->_DrainVoiceDeliveries();
+        break;
     case WM_IpcWorkerDisconnected: {
-        // The worker posts this only after its OVERLAPPED read has completed,
+        // The worker posts this only after both OVERLAPPED operations have drained,
         // so it is now safe for the UI thread to close and recreate all pipes.
         const HANDLE disconnectedPipe = reinterpret_cast<HANDLE>(wParam);
         const UINT disconnectedGeneration = static_cast<UINT>(lParam);

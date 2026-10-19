@@ -43,6 +43,14 @@ add_compile_options(/Zc:__cplusplus)
 # Match WeaselTSF: avoid dynamic TLS init guards in in-proc tip DLLs
 add_compile_options(/Zc:threadSafeInit-)
 
+# These units contain completion guards and exception boundaries around reentrant hooks.
+# Preserve the TIP's static CRT/TLS settings while enabling stack unwinding for these units.
+set_source_files_properties(
+    src/Edit/VoiceFinalEditSession.cpp src/Edit/VoicePreviewEditSession.cpp
+    src/IPC/WorkerDuplexPump.cpp src/IPC/VoiceDeliveryRegistry.cpp
+    src/IME/MetasequoiaIME_VoiceDelivery.cpp src/IME/MetasequoiaIME_IpcWorker.cpp
+    PROPERTIES COMPILE_OPTIONS /EHsc)
+
 # This DLL is loaded into Chrome, QQ, Office and every other host the user types into, and it parses
 # what those hosts hand it -- yet it was building at the default /W3 while ui/ and server/ already
 # use /W4 on their own targets. /WX is deliberately not set yet: the existing warnings have to be
@@ -118,6 +126,10 @@ add_library(${PROJECT_NAME} SHARED
     "./src/Edit/GetTextExtentEditSession.cpp"
     "./src/Edit/GetTextExtentEditSession.h"
     "./src/Edit/TextEditSink.cpp"
+    "./src/Edit/VoiceFinalEditSession.cpp"
+    "./src/Edit/VoiceFinalEditSession.h"
+    "./src/Edit/VoicePreviewEditSession.cpp"
+    "./src/Edit/VoicePreviewEditSession.h"
     # Global
     "./src/Global/FanyDefines.h"
     "./src/Global/Globals.cpp"
@@ -136,6 +148,7 @@ add_library(${PROJECT_NAME} SHARED
     "./src/IME/MetasequoiaIME.rc"
     "./src/IME/MetasequoiaIME_AsyncRequests.cpp"
     "./src/IME/MetasequoiaIME_IpcWorker.cpp"
+    "./src/IME/MetasequoiaIME_VoiceDelivery.cpp"
     "./src/IME/MetasequoiaIME_WindowProc.cpp"
     "./src/IME/MetasequoiaIMEBaseStructure.cpp"
     "./src/IME/MetasequoiaIMEBaseStructure.h"
@@ -143,8 +156,11 @@ add_library(${PROJECT_NAME} SHARED
     "./src/IME/MetasequoiaIMEStructureArray.h"
     # IPC
     "./src/IPC/Ipc.cpp"
+    "./src/IPC/WorkerDuplexPump.cpp"
+    "./src/IPC/VoiceDeliveryRegistry.cpp"
     "./src/IPC/Ipc.h"
     "./src/IPC/VoiceCompositionPipe.h"
+    "./src/IPC/WorkerDuplexPump.h"
     # Key
     "./src/Key/DeferredKeyFailurePolicy.h"
     "./src/Key/KeyEventSink.cpp"

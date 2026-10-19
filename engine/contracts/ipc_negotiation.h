@@ -31,6 +31,10 @@ constexpr std::uint32_t CaretStateIndicator = 1u << 5;
 constexpr std::uint32_t TrilingualCycle = 1u << 6;
 constexpr std::uint32_t InputStateShortcuts = 1u << 7;
 constexpr std::uint32_t TemporaryJapaneseLongVowel = 1u << 8;
+// Optional: the worker pipe accepts a fixed-width final-delivery ACK on its
+// reverse direction. Do not advertise this bit until that path is wired; the
+// legacy hello never receives it, even when the caller advertises it.
+constexpr std::uint32_t VoiceDeliveryAck = 1u << 9;
 constexpr std::uint32_t Capabilities = RequestIds | FocusEpochs | FramedVoice;
 constexpr std::uint32_t RequiredCapabilities = RequestIds | FocusEpochs;
 
@@ -63,7 +67,7 @@ inline Negotiation Negotiate(const FanyImeNamedpipeData &hello, std::uint32_t ca
     // Existing installed DLLs use this exact unversioned hello shape. Retain
     // their established protocol during an upgrade without sending a new ACK.
     if (hello.keycode == 0 && hello.wch == 0 && hello.request_id == 0 && hello.modifiers_down == 0)
-        return {true, true, capabilities};
+        return {true, true, capabilities & ~VoiceDeliveryAck};
     if (hello.keycode != Magic || hello.wch != Major || hello.request_id == 0 ||
         hello.request_id == FANY_IME_NO_REQUEST_ID || hello.point[0] < 0 || hello.point[1] < 0)
         return {};

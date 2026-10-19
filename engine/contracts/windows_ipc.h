@@ -479,7 +479,11 @@ constexpr std::uint32_t EnumerationCommaKeysChanged = 38;
 // FanyImePipeFlags::HorizontalArrowSelection and applies the Server's answer instead of moving the caret itself.
 // Older DLLs ignore the opcode and keep moving the caret.
 constexpr std::uint32_t HorizontalArrowSelectionChanged = 39;
-constexpr std::uint32_t MaxKnown = HorizontalArrowSelectionChanged;
+// Final voice delivery. Unlike the older voice snapshots, this opcode carries a
+// fixed-width binary payload; use voice_final_delivery.h rather than reading data
+// as a NUL-terminated candidate string.
+constexpr std::uint32_t VoiceFinal = 40;
+constexpr std::uint32_t MaxKnown = VoiceFinal;
 // Source compatibility for the Server's historical spellings.
 constexpr std::uint32_t SwitchToEn = SwitchToEnglish;
 constexpr std::uint32_t SwitchToCn = SwitchToChinese;

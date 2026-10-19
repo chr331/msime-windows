@@ -15,6 +15,13 @@ target_include_directories(test_vim_mode PRIVATE ../src)
 target_compile_features(test_vim_mode PRIVATE cxx_std_17)
 add_test(NAME vim_mode COMMAND test_vim_mode)
 
+# Shared final voice-delivery wire contract. This target has no SDK, COM or pipe
+# dependency; it verifies the binary codec and optional negotiation bit offline.
+add_executable(test_voice_final_contract voice_final_contract.cpp)
+target_include_directories(test_voice_final_contract PRIVATE ../../engine/contracts)
+target_compile_features(test_voice_final_contract PRIVATE cxx_std_17)
+add_test(NAME voice_final_contract COMMAND test_voice_final_contract)
+
 add_executable(test_client_fallback client_fallback.cpp)
 target_include_directories(test_client_fallback PRIVATE ../src)
 target_compile_features(test_client_fallback PRIVATE cxx_std_17)
@@ -102,6 +109,66 @@ if(WIN32)
     target_include_directories(test_temporary_japanese_input PRIVATE ../src/Header)
     target_compile_features(test_temporary_japanese_input PRIVATE cxx_std_17)
     add_test(NAME temporary_japanese_input COMMAND test_temporary_japanese_input)
+
+    # Link the production strict edit session, then exercise its real TSF document calls through
+    # full ITfContext/ITfRange/ITfComposition vtable mocks.
+    add_executable(test_voice_final_edit_session
+        voice_final_edit_session.cpp
+        ../src/Edit/VoiceFinalEditSession.cpp)
+    target_include_directories(test_voice_final_edit_session PRIVATE ../src)
+    target_compile_features(test_voice_final_edit_session PRIVATE cxx_std_17)
+    target_compile_definitions(test_voice_final_edit_session PRIVATE UNICODE _UNICODE)
+    target_link_libraries(test_voice_final_edit_session PRIVATE ole32 uuid)
+    add_test(NAME voice_final_edit_session COMMAND test_voice_final_edit_session)
+
+    # Dedicated preview execution: real production edit session plus full TSF vtable mocks,
+    # including ITfContextComposition and ITfCompositionSink.
+    add_executable(test_voice_preview_edit_session
+        voice_preview_edit_session.cpp
+        ../src/Edit/VoicePreviewEditSession.cpp
+        ../src/Edit/VoiceFinalEditSession.cpp)
+    target_include_directories(test_voice_preview_edit_session PRIVATE ../src)
+    target_compile_features(test_voice_preview_edit_session PRIVATE cxx_std_17)
+    target_compile_definitions(test_voice_preview_edit_session PRIVATE UNICODE _UNICODE)
+    target_link_libraries(test_voice_preview_edit_session PRIVATE ole32 uuid)
+    add_test(NAME voice_preview_edit_session COMMAND test_voice_preview_edit_session)
+
+    # Real message-mode named-pipe fixture. The production pump performs overlapped read and
+    # write operations through the Windows SDK; the test observes actual ERROR_IO_PENDING.
+    add_executable(test_worker_duplex_pump
+        worker_duplex_pump.cpp
+        ../src/IPC/WorkerDuplexPump.cpp)
+    target_include_directories(test_worker_duplex_pump PRIVATE ../src)
+    target_compile_features(test_worker_duplex_pump PRIVATE cxx_std_17)
+    target_compile_definitions(test_worker_duplex_pump PRIVATE UNICODE _UNICODE)
+    add_test(NAME worker_duplex_pump COMMAND test_worker_duplex_pump)
+    set_tests_properties(worker_duplex_pump PROPERTIES TIMEOUT 20)
+
+    add_executable(test_voice_delivery_registry voice_delivery_registry.cpp ../src/IPC/VoiceDeliveryRegistry.cpp)
+    target_include_directories(test_voice_delivery_registry PRIVATE ../src)
+    target_compile_features(test_voice_delivery_registry PRIVATE cxx_std_17)
+    target_compile_definitions(test_voice_delivery_registry PRIVATE UNICODE _UNICODE)
+    add_test(NAME voice_delivery_registry COMMAND test_voice_delivery_registry)
+
+    set(voice_reset_inputs
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/IME/MetasequoiaIME_VoiceDelivery.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/IME/MetasequoiaIME.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/Key/KeyHandler.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/Composition/Composition.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/Composition/EndComposition.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/generate_voice_reset_fixture.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${voice_reset_inputs})
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_voice_reset_fixture.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src" "${CMAKE_CURRENT_BINARY_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    add_executable(test_voice_reset_integration voice_reset_integration.cpp
+        ../src/Edit/VoiceFinalEditSession.cpp ../src/Edit/VoicePreviewEditSession.cpp
+        ../src/IPC/VoiceDeliveryRegistry.cpp)
+    target_include_directories(test_voice_reset_integration PRIVATE ../src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_features(test_voice_reset_integration PRIVATE cxx_std_17)
+    target_compile_definitions(test_voice_reset_integration PRIVATE UNICODE _UNICODE)
+    target_link_libraries(test_voice_reset_integration PRIVATE ole32 uuid user32)
+    add_test(NAME voice_reset_integration COMMAND test_voice_reset_integration)
 endif()
 
 # Exercise the session-side commit-reply contract without loading a TIP into a host. The paths

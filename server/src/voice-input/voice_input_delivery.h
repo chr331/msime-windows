@@ -16,22 +16,40 @@ inline bool AllInputEventsInjected(std::uint32_t requested, std::uint32_t inject
 }
 
 // Send one Unicode character as a key-down/key-up pair. `send` returns the
-// number of events SendInput accepted for that character. A short count means
-// the pair is incomplete, so delivery stops immediately; the returned value is
-// the number of characters for which both events were accepted.
-template <typename SendUnicodeCharacter>
-std::size_t SendUnicodeTextWith(const std::wstring &text, SendUnicodeCharacter send)
+// number of events SendInput accepted for that character. A full count (2)
+// advances to the next character. An accepted key-down only (1) is repaired by
+// one KEYUP for the same UTF-16 unit through `cleanup`; zero accepted events
+// needs no cleanup. Either short count stops delivery immediately and is never
+// counted as fully delivered. The cleanup callback returns the number of
+// events SendInput accepted for the KEYUP (1 on success); its result is
+// diagnostic only and never turns a partial character into a delivered one.
+template <typename SendUnicodeCharacter, typename CleanupUnicodeCharacter>
+std::size_t SendUnicodeTextWith(const std::wstring &text, SendUnicodeCharacter send, CleanupUnicodeCharacter cleanup)
 {
     std::size_t delivered = 0;
     for (wchar_t ch : text)
     {
-        if (!AllInputEventsInjected(2, send(ch)))
+        const std::uint32_t injected = send(ch);
+        if (AllInputEventsInjected(2, injected))
         {
-            break;
+            ++delivered;
+            continue;
         }
-        ++delivered;
+        if (injected == 1)
+        {
+            cleanup(ch);
+        }
+        break;
     }
     return delivered;
+}
+
+// Backward-compatible entry point for callers that inject a character pair
+// atomically and therefore have no partial key-down to release.
+template <typename SendUnicodeCharacter>
+std::size_t SendUnicodeTextWith(const std::wstring &text, SendUnicodeCharacter send)
+{
+    return SendUnicodeTextWith(text, send, [](wchar_t) -> std::uint32_t { return 0; });
 }
 
 // Ctrl+V is sent as four events: Ctrl down, V down, V up, Ctrl up. Only all

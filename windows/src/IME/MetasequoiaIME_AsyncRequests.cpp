@@ -799,6 +799,7 @@ void CMetasequoiaIME::_ClearAsyncKeyRequests()
 
 void CMetasequoiaIME::_ClearPendingIpcRequests()
 {
+    _InvalidateVoiceDeliveries();
     _ClearAsyncKeyRequests();
     ResetNamedpipeReplyState();
 

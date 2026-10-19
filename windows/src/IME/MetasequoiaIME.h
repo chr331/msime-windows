@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -18,6 +19,8 @@
 class CLangBarItemButton;
 class CCandidateListUIPresenter;
 class CCompositionProcessorEngine;
+class VoiceDeliveryRegistry;
+struct VoiceDeliveryUiState;
 
 const DWORD WM_CheckGlobalCompartment = WM_USER;
 const DWORD WM_ConnectNamedpipe = WM_USER + 1;
@@ -55,6 +58,7 @@ const DWORD WM_AsyncCycleInputMode = WM_USER + 29;
 const DWORD WM_SyncCapsLockPunctuation = WM_USER + 30;
 const DWORD WM_ApplyUiLessCandidates = WM_USER + 31;
 const DWORD WM_ApplyCapsLockEdge = WM_USER + 32;
+const DWORD WM_VoiceDelivery = WM_USER + 33;
 constexpr ULONG_PTR SMART_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535050u;
 constexpr ULONG_PTR PAIRED_PUNCTUATION_SENDINPUT_EXTRA_INFO = 0x4D535051u;
 // Synthetic input that this tip generates carries a marker meaning "this tip
@@ -574,6 +578,10 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     bool _PostServerTextDelivery(UINT windowMessage, _In_z_ const WCHAR *text);
     bool _TakeServerCandidateCommit(UINT token, _Out_ WorkerCandidateCommit &request);
     void _ResetVoiceCompositionAssemble();
+    void _InitializeVoiceDelivery();
+    void _InvalidateVoiceDeliveries();
+    bool _ShouldPreserveVoiceComposition(ITfComposition *composition) const;
+    void _DrainVoiceDeliveries();
     void _AssembleVoiceCompositionFrame(const FanyImeNamedpipeDataToTsfWorkerThread &buf);
     void _DispatchUnsolicitedVoiceText(WPARAM wParam, KEYSTROKE_FUNCTION function);
     struct WorkerCompartmentSwitch
@@ -903,6 +911,9 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     std::thread *_pIpcThread;
     std::atomic<HANDLE> _hToTsfWorkerThreadPipe;
     std::atomic<UINT> _workerPipeGeneration;
+    std::atomic<uint32_t> _voiceServerCapabilities{0};
+    std::shared_ptr<VoiceDeliveryRegistry> _voiceDeliveries;
+    std::shared_ptr<VoiceDeliveryUiState> _voiceDeliveryUi;
     HANDLE _ipcStopEvent;
     // Auto-reset wake-ups that replace polling (see BindNamedpipeWakeEvents): the
     // worker signals _workerAckEvent after recording the focus acknowledgement,

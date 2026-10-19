@@ -25,6 +25,7 @@ static thread_local bool canUseSharedMemory = false;
 
 static thread_local HANDLE hPipe = nullptr;
 static thread_local uint32_t negotiatedServerCapabilities = 0;
+static thread_local std::atomic<uint32_t> *boundVoiceServerCapabilities = nullptr;
 static thread_local HANDLE hFromServerPipe = nullptr;
 static thread_local HANDLE hToTsfWorkerThreadPipe = nullptr;
 
@@ -475,6 +476,7 @@ bool WaitForWorkerPipeReady(HANDLE hPipeHandle)
 bool WaitForProtocolReady(uint64_t requestId)
 {
     negotiatedServerCapabilities = 0;
+    if (boundVoiceServerCapabilities) boundVoiceServerCapabilities->store(0, std::memory_order_release);
     // Do not clear the temporary R-mode policy here: the worker pipe registers
     // before Main and may already hold this connection's policy. CloseNamedpipe
     // and the worker's disconnect path clear it for a replaced Server.
@@ -494,7 +496,10 @@ bool WaitForProtocolReady(uint64_t requestId)
         {
             const bool accepted = FanyImeProtocol::AcceptReply(reply, requestId);
             if (accepted)
+            {
                 negotiatedServerCapabilities = FanyImeProtocol::ReplyCapabilities(reply);
+                if (boundVoiceServerCapabilities) boundVoiceServerCapabilities->store(negotiatedServerCapabilities, std::memory_order_release);
+            }
             return accepted;
         }
         CachePendingReply(reply);
@@ -512,7 +517,7 @@ bool WritePipeHello(HANDLE hPipeHandle, UINT pipeRole)
                                    FanyImeProtocol::Capabilities | FanyImeProtocol::CharacterSetShortcut |
                                        FanyImeProtocol::CompositionRestore | FanyImeProtocol::CaretStateIndicator |
                                        FanyImeProtocol::TrilingualCycle | FanyImeProtocol::InputStateShortcuts |
-                                       FanyImeProtocol::TemporaryJapaneseLongVowel);
+                                       FanyImeProtocol::TemporaryJapaneseLongVowel | FanyImeProtocol::VoiceDeliveryAck);
         BOOL ret = WriteFile(hPipeHandle, &hello, sizeof(hello), &bytesWritten, NULL);
         // Never authorize keys from merely writing a hello. An old Server
         // without negotiation times out into the existing raw-input fallback.
@@ -640,7 +645,8 @@ void BindNamedpipeFocusState(const void *owner, bool *focusResetPending, bool *a
                              std::atomic<bool> *localSessionResetPending, std::atomic<UINT> *localSessionResetToken,
                              std::atomic<bool> *workerCommitReady, std::atomic<uint64_t> *acknowledgedWorkerFocusToken,
                              std::atomic<HANDLE> *workerPipeHandle, std::atomic<UINT> *workerPipeGeneration,
-                             std::atomic<FanyImeTemporaryJapanese::Policy> *temporaryJapanesePolicy)
+                             std::atomic<FanyImeTemporaryJapanese::Policy> *temporaryJapanesePolicy,
+    std::atomic<uint32_t> *voiceServerCapabilities)
 {
     boundFocusStateOwner = owner;
     boundFocusResetPending = focusResetPending;
@@ -653,6 +659,7 @@ void BindNamedpipeFocusState(const void *owner, bool *focusResetPending, bool *a
     boundWorkerPipeHandle = workerPipeHandle;
     boundWorkerPipeGeneration = workerPipeGeneration;
     boundTemporaryJapanesePolicy = temporaryJapanesePolicy;
+    boundVoiceServerCapabilities = voiceServerCapabilities;
 }
 
 FanyImeTemporaryJapanese::Policy GetTemporaryJapanesePolicy()
@@ -676,6 +683,8 @@ void UnbindNamedpipeFocusState(const void *owner)
     {
         return;
     }
+    if (boundVoiceServerCapabilities) boundVoiceServerCapabilities->store(0, std::memory_order_release);
+    boundVoiceServerCapabilities = nullptr;
     boundFocusStateOwner = nullptr;
     boundFocusResetPending = nullptr;
     boundActivationRequired = nullptr;
@@ -959,6 +968,7 @@ int CloseIpc()
 int CloseNamedpipe()
 {
     negotiatedServerCapabilities = 0;
+    if (boundVoiceServerCapabilities) boundVoiceServerCapabilities->store(0, std::memory_order_release);
     if (boundTemporaryJapanesePolicy)
         boundTemporaryJapanesePolicy->store(0, std::memory_order_relaxed);
     ClosePipeHandleIfValid(hPipe);

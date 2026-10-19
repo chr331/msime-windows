@@ -1,4 +1,5 @@
 #include "voice_result_card.h"
+#include "voice_clipboard.h"
 #include "mvi_utils.h"
 #include "config/ime_config.h"
 
@@ -108,38 +109,6 @@ template <typename T> void safe_release(T **obj)
     }
 }
 
-// 剪贴板操作只在显式 Copy 点击（UI 线程）时发生。先备好完整的 UTF-16 内存（含结尾 NUL），
-// 再打开剪贴板提交；分配、打开或提交任一步失败都保留卡片全文，并释放尚未转移所有权的内存。
-bool CopyToClipboard(HWND hwnd, const std::wstring &text)
-{
-    if (text.empty())
-        return false;
-
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!handle)
-        return false;
-
-    wchar_t *dst = static_cast<wchar_t *>(GlobalLock(handle));
-    if (!dst)
-    {
-        GlobalFree(handle);
-        return false;
-    }
-    memcpy(dst, text.c_str(), bytes);
-    GlobalUnlock(handle);
-
-    bool copied = false;
-    if (OpenClipboard(hwnd))
-    {
-        if (EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, handle) != nullptr)
-            copied = true; // Ownership transferred to the system on success.
-        CloseClipboard();
-    }
-    if (!copied)
-        GlobalFree(handle); // The system never took ownership when any step failed.
-    return copied;
-}
 } // namespace
 
 VoiceResultCard::VoiceResultCard() = default;
@@ -282,13 +251,29 @@ void VoiceResultCard::reset(std::uint64_t session)
     }
 }
 
-void VoiceResultCard::show(std::uint64_t session, const std::wstring &text)
+VoiceInput::RetainedResultPresentation VoiceResultCard::show_with_outcome(std::uint64_t session,
+                                                                          const std::wstring &text)
 {
+    const HWND hwnd = post_hwnd_.load(std::memory_order_acquire);
+    if (!hwnd)
+        return VoiceInput::RetainedResultPresentation::Unavailable;
     if (model_.show(session, text))
     {
-        if (HWND hwnd = post_hwnd_.load(std::memory_order_acquire))
-            PostMessageW(hwnd, kModelChangedMessage, 0, 0);
+        if (PostMessageW(hwnd, kModelChangedMessage, 0, 0))
+            return VoiceInput::RetainedResultPresentation::Shown;
+        // Do not leave a later unrelated model notification free to reveal a card whose explicit
+        // show notification never reached the UI thread.
+        model_.close_if_current(session, text);
+        return VoiceInput::RetainedResultPresentation::DeliveryFailed;
     }
+    if (model_.matches_display(session, text))
+        return VoiceInput::RetainedResultPresentation::AlreadyShown;
+    return VoiceInput::RetainedResultPresentation::Rejected;
+}
+
+bool VoiceResultCard::show(std::uint64_t session, const std::wstring &text)
+{
+    return VoiceInput::RetainedResultWasAccepted(show_with_outcome(session, text));
 }
 
 void VoiceResultCard::close()
@@ -766,7 +751,7 @@ void VoiceResultCard::on_copy_button()
     if (!model_.read_current(displayed_session_, displayed_text_, text))
         return;
 
-    if (CopyToClipboard(hwnd_, text))
+    if (VoiceInput::CopyUnicodeTextToClipboard(hwnd_, text))
     {
         feedback_ = CopyFeedback::Copied;
         schedule_copy_auto_close(displayed_session_, text);

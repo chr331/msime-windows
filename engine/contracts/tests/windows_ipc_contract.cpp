@@ -45,7 +45,8 @@ int main()
     CHECK((FanyImeProtocol::Negotiate(FanyImeProtocol::Hello(7, 124), rCapabilities).capabilities &
            FanyImeProtocol::TemporaryJapaneseLongVowel) == 0);
     CHECK(FanyImeWorkerReplyType::TemporaryJapanesePolicyChanged == 36);
-    CHECK(FanyImeWorkerReplyType::MaxKnown == 39);
+    CHECK(FanyImeWorkerReplyType::VoiceFinal == 40);
+    CHECK(FanyImeWorkerReplyType::MaxKnown == 40);
     for (wchar_t payload = L'0'; payload <= L'3'; ++payload)
     {
         CHECK(FanyImeTemporaryJapanese::IsValidPayload(payload));
