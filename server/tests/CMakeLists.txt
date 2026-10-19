@@ -6,6 +6,14 @@ target_include_directories(test_voice_control_dispatch PRIVATE ../src "${MSIME_E
 target_compile_features(test_voice_control_dispatch PRIVATE cxx_std_17)
 add_test(NAME voice_control_dispatch COMMAND test_voice_control_dispatch)
 
+# Phase-A voice input target snapshot: pure policy in voice_target.h only. The
+# Windows/UIA adapter (voice_target.cpp) is host-only and stays out of this
+# standalone target; it links no engine, dictionary or third-party dependency.
+add_executable(test_voice_target src/test_voice_target.cpp)
+target_include_directories(test_voice_target PRIVATE ../src)
+target_compile_features(test_voice_target PRIVATE cxx_std_17)
+add_test(NAME voice_target COMMAND test_voice_target)
+
 set(TEST_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark_model_path.cpp"
@@ -198,5 +206,26 @@ add_executable(test_webview_contract "${MSIME_ENGINE_DIR}/contracts/webview/test
 target_link_libraries(test_webview_contract PRIVATE Boost::json)
 add_test(NAME webview_contract COMMAND test_webview_contract
     "${MSIME_ENGINE_DIR}/contracts/webview/fixtures.json")
+
+
+
+add_executable(test_voice_result_card src/test_voice_result_card.cpp)
+target_include_directories(test_voice_result_card PRIVATE ../src)
+target_compile_features(test_voice_result_card PRIVATE cxx_std_17)
+add_test(NAME voice_result_card COMMAND test_voice_result_card)
+# Phase-C voice commit routing policy: pure decisions in voice_commit_policy.h
+# and voice_target.h only; no Windows adapter, engine or dictionary dependency.
+add_executable(test_voice_commit_policy src/test_voice_commit_policy.cpp)
+target_include_directories(test_voice_commit_policy PRIVATE ../src)
+target_compile_features(test_voice_commit_policy PRIVATE cxx_std_17)
+add_test(NAME voice_commit_policy COMMAND test_voice_commit_policy)
+
+if(WIN32)
+    add_executable(test_voice_overlay_layout src/test_voice_overlay_layout.cpp)
+    target_include_directories(test_voice_overlay_layout PRIVATE ../src)
+    target_compile_features(test_voice_overlay_layout PRIVATE cxx_std_17)
+    target_compile_definitions(test_voice_overlay_layout PRIVATE NOMINMAX)
+    add_test(NAME voice_overlay_layout COMMAND test_voice_overlay_layout)
+endif()
 
 

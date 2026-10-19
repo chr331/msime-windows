@@ -1,5 +1,6 @@
 #pragma once
 
+#include "voice_overlay_layout.h"
 #include <windows.h>
 #include <atomic>
 #include <functional>
@@ -34,6 +35,10 @@ class WaveOverlay
     void show();
     void hide();
 
+    // Thread-safe. Pass the anchor captured once at recording start; an invalid anchor restores
+    // the foreground-monitor fallback used by standalone fixtures.
+    void set_anchor(const VoiceOverlayAnchor &anchor);
+
     void set_listening(bool listening);
     void set_input_level(float level);
     void set_transcript(const std::wstring &text);
@@ -52,7 +57,9 @@ class WaveOverlay
     void release_text_layout();
     void update_wave_levels();
     void draw();
-    void update_dpi_scale();
+    VoiceOverlayAnchor resolve_anchor() const;
+    void refresh_anchor_for_display_change();
+    void update_dpi_scale(const VoiceOverlayAnchor &anchor);
     void update_window_bounds();
     bool hit_test_action(float x, float y, Action &action) const;
 
@@ -61,6 +68,8 @@ class WaveOverlay
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
+    // Safe publication target for background callers; cleared before DestroyWindow.
+    std::atomic<HWND> post_hwnd_{nullptr};
     UINT dpi_ = 96;
     float scale_x_ = 1.0f;
     float scale_y_ = 1.0f;
@@ -75,6 +84,8 @@ class WaveOverlay
     std::function<void(Action)> action_handler_;
     std::mutex transcript_mutex_;
     std::wstring transcript_;
+    mutable std::mutex anchor_mutex_;
+    VoiceOverlayAnchor anchor_;
     float levels_[kLevelCount] = {};
     float amplitudes_[kLevelCount] = {};
     float phases_[kLevelCount] = {};
@@ -87,6 +98,7 @@ class WaveOverlay
     struct ID2D1SolidColorBrush *bg_brush_ = nullptr;
     struct ID2D1SolidColorBrush *border_brush_ = nullptr;
     struct ID2D1SolidColorBrush *action_bg_brush_ = nullptr;
+    struct ID2D1SolidColorBrush *text_brush_ = nullptr;
     struct IDWriteFactory *write_factory_ = nullptr;
     struct IDWriteTextFormat *text_format_ = nullptr;
     struct IDWriteTextFormat *processing_text_format_ = nullptr;

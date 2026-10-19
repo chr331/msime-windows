@@ -16,6 +16,7 @@ constexpr wchar_t kClassName[] = L"MviWaveOverlayWindow";
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kTimerMs = 16;
 constexpr UINT kTranscriptChangedMessage = WM_APP + 186;
+constexpr UINT kAnchorChangedMessage = WM_APP + 192;
 constexpr int kCompactWidth = 78;
 constexpr int kCompactHeight = 32;
 constexpr int kProcessingWidth = 112;
@@ -24,13 +25,12 @@ constexpr int kActionWidth = 142;
 constexpr int kActionHeight = 40;
 constexpr float kActionCenterInset = 18.0f;
 constexpr float kActionRadius = 12.0f;
-constexpr int kTranscriptWidth = 420;
+constexpr int kTranscriptWidth = kVoiceOverlayPreferredWidthDip;
 constexpr int kTranscriptHeight = 112;
-constexpr float kTranscriptHorizontalPadding = 14.0f;
-constexpr float kTranscriptTextTop = 33.0f;
-constexpr float kTranscriptTextBottom = 8.0f;
+constexpr float kTranscriptHorizontalPadding = 18.0f;
+constexpr float kTranscriptTextTop = 37.0f;
+constexpr float kTranscriptTextBottom = 6.0f;
 constexpr UINT32 kMaxTranscriptLines = 3;
-constexpr float kPanelOpacity = 0.90f;
 constexpr int kBarCount = 12;
 constexpr float kDotRadius = 1.15f;
 constexpr float kMaxHalfHeight = 14.0f;
@@ -93,7 +93,7 @@ bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_ha
     text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
-    text_format_->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, 22.0f, 18.0f);
+    text_format_->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, 23.0f, 18.0f);
     processing_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     processing_text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 
@@ -131,6 +131,8 @@ bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_ha
         return false;
     }
 
+    post_hwnd_.store(hwnd_, std::memory_order_release);
+
     // 设置窗口透明
     SetLayeredWindowAttributes(hwnd_, 0, 255, LWA_ALPHA);
     MARGINS mar = {-1};
@@ -141,6 +143,7 @@ bool WaveOverlay::init(HINSTANCE instance, std::function<void(Action)> action_ha
 
 void WaveOverlay::shutdown()
 {
+    post_hwnd_.store(nullptr, std::memory_order_release);
     if (hwnd_)
     {
         DestroyWindow(hwnd_);
@@ -180,6 +183,16 @@ void WaveOverlay::hide()
     {
         ShowWindow(hwnd_, SW_HIDE);
     }
+}
+
+void WaveOverlay::set_anchor(const VoiceOverlayAnchor &anchor)
+{
+    {
+        std::lock_guard<std::mutex> lock(anchor_mutex_);
+        anchor_ = anchor;
+    }
+    if (HWND hwnd = post_hwnd_.load(std::memory_order_acquire))
+        PostMessageW(hwnd, kAnchorChangedMessage, 0, 0);
 }
 
 void WaveOverlay::set_listening(bool listening)
@@ -275,18 +288,33 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         {
             render_target_->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam)));
         }
-        update_dpi_scale();
+        update_dpi_scale(resolve_anchor());
         return 0;
     case WM_DPICHANGED:
-        // update_window_bounds 内部会刷新缩放，DPI 变化时重新计算位置/尺寸。
-        update_window_bounds();
-        return 0;
-    case WM_DISPLAYCHANGE:
-        // 分辨率切换时重新按当前显示器计算 DPI 缩放与窗口位置/尺寸，
-        // 与候选框一致地适配分辨率变化（SetWindowPos 触发的 WM_SIZE 会同步渲染目标尺寸）。
+        // A saved anchor is refreshed only for system layout changes. Ordinary foreground changes
+        // during recognition never reach this path.
+        refresh_anchor_for_display_change();
         update_window_bounds();
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_DISPLAYCHANGE:
+        // Re-resolve the saved monitor after a display/DPI layout change, then keep growing from
+        // the same work-area center/bottom anchor. Foreground focus is deliberately not consulted.
+        refresh_anchor_for_display_change();
+        update_window_bounds();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_SETTINGCHANGE:
+        // Taskbar position/autohide changes resize rcWork without necessarily changing the monitor
+        // or DPI. Refresh the saved anchor for that layout change only.
+        if (wParam == SPI_SETWORKAREA)
+        {
+            refresh_anchor_for_display_change();
+            update_window_bounds();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
     case WM_SETCURSOR: {
@@ -335,6 +363,10 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
         if (action_handler_)
             action_handler_(Action::Cancel);
         return 0;
+    case kAnchorChangedMessage:
+        update_window_bounds();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
     case kTranscriptChangedMessage:
         if (!actions_visible_.load())
             action_pressed_ = false;
@@ -351,6 +383,7 @@ LRESULT WaveOverlay::handle_message(HWND hwnd, UINT message, WPARAM wParam, LPAR
     }
     case WM_DESTROY:
         KillTimer(hwnd, kTimerId);
+        post_hwnd_.store(nullptr, std::memory_order_release);
         release_render_target();
         return 0;
     default:
@@ -380,44 +413,33 @@ bool WaveOverlay::ensure_render_target()
         return false;
     }
 
-    const D2D1_COLOR_F background = light_theme_ ? D2D1::ColorF(0.98f, 0.98f, 0.99f, kPanelOpacity)
-                                                 : D2D1::ColorF(0.07f, 0.08f, 0.10f, kPanelOpacity);
-    const D2D1_COLOR_F bars = light_theme_ ? D2D1::ColorF(0.35f, 0.18f, 0.42f) : D2D1::ColorF(D2D1::ColorF::White);
+    const D2D1_COLOR_F background =
+        light_theme_ ? D2D1::ColorF(0.985f, 0.986f, 0.988f, 0.97f) : D2D1::ColorF(0.086f, 0.090f, 0.102f, 0.96f);
+    const D2D1_COLOR_F bars = light_theme_ ? D2D1::ColorF(0.16f, 0.45f, 0.38f) : D2D1::ColorF(0.49f, 0.75f, 0.66f);
+    const D2D1_COLOR_F text_color =
+        light_theme_ ? D2D1::ColorF(0.11f, 0.12f, 0.14f) : D2D1::ColorF(0.93f, 0.94f, 0.95f);
     const D2D1_COLOR_F border =
-        light_theme_ ? D2D1::ColorF(0.20f, 0.20f, 0.24f, 0.22f) : D2D1::ColorF(0.90f, 0.93f, 1.0f, 0.20f);
+        light_theme_ ? D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.09f) : D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.11f);
     const D2D1_COLOR_F action_background =
-        light_theme_ ? D2D1::ColorF(0.86f, 0.87f, 0.89f) : D2D1::ColorF(0.18f, 0.19f, 0.21f);
+        light_theme_ ? D2D1::ColorF(0.945f, 0.950f, 0.958f) : D2D1::ColorF(0.140f, 0.145f, 0.160f);
 
-    if (FAILED(render_target_->CreateSolidColorBrush(background, &bg_brush_)))
+    if (FAILED(render_target_->CreateSolidColorBrush(background, &bg_brush_)) ||
+        FAILED(render_target_->CreateSolidColorBrush(bars, &bar_brush_)) ||
+        FAILED(render_target_->CreateSolidColorBrush(border, &border_brush_)) ||
+        FAILED(render_target_->CreateSolidColorBrush(action_background, &action_bg_brush_)) ||
+        FAILED(render_target_->CreateSolidColorBrush(text_color, &text_brush_)))
     {
         release_render_target();
         return false;
     }
 
-    if (FAILED(render_target_->CreateSolidColorBrush(bars, &bar_brush_)))
-    {
-        release_render_target();
-        return false;
-    }
-
-    if (FAILED(render_target_->CreateSolidColorBrush(border, &border_brush_)))
-    {
-        release_render_target();
-        return false;
-    }
-
-    if (FAILED(render_target_->CreateSolidColorBrush(action_background, &action_bg_brush_)))
-    {
-        release_render_target();
-        return false;
-    }
-
-    update_dpi_scale();
+    update_dpi_scale(resolve_anchor());
     return true;
 }
 
 void WaveOverlay::release_render_target()
 {
+    safe_release(&text_brush_);
     safe_release(&bar_brush_);
     safe_release(&bg_brush_);
     safe_release(&border_brush_);
@@ -479,30 +501,37 @@ bool WaveOverlay::ensure_text_layout(const std::wstring &transcript, float width
     return true;
 }
 
-void WaveOverlay::update_dpi_scale()
+VoiceOverlayAnchor WaveOverlay::resolve_anchor() const
+{
+    {
+        std::lock_guard<std::mutex> lock(anchor_mutex_);
+        if (anchor_.valid)
+            return anchor_;
+    }
+    return CaptureVoiceOverlayAnchor();
+}
+
+void WaveOverlay::refresh_anchor_for_display_change()
+{
+    std::lock_guard<std::mutex> lock(anchor_mutex_);
+    if (anchor_.valid)
+        anchor_ = RefreshVoiceOverlayAnchorForDisplayChange(anchor_);
+}
+
+void WaveOverlay::update_dpi_scale(const VoiceOverlayAnchor &anchor)
 {
     if (!hwnd_)
-    {
         return;
-    }
 
-    // 与候选框一致：按目标显示器（前台窗口所在显示器，与 update_window_bounds 里
-    // GetForegroundMonitorMetrics 同源）的有效 DPI 计算缩放，而不是用 GetDpiForWindow(hwnd_)。
-    // 后者在切换分辨率时可能返回陈旧值，且当提示条与前台窗口分处不同显示器时会取错
-    // DPI，导致尺寸/缩放错误。
-    const float scale = mvi_utils::GetForegroundMonitorScale();
+    // The anchor captured at recording start owns the scale for this session. Only a fixture that
+    // never called set_anchor falls back to the foreground monitor.
+    const float scale = anchor.valid ? anchor.scale() : mvi_utils::GetForegroundMonitorScale();
     scale_x_ = scale;
     scale_y_ = scale;
     dpi_ = static_cast<UINT>(std::lround(scale * USER_DEFAULT_SCREEN_DPI));
 
-    // 渲染目标的 DPI 决定 draw() 里逻辑坐标（px / scale_）到像素的映射。它只在
-    // CreateHwndRenderTarget 时按创建时的系统 DPI 定过一次，切换分辨率/DPI 后不会自动
-    // 更新，导致逻辑坐标映射到错误的像素尺寸（尺寸/缩放错乱）。这里同步刷新，等价于
-    // 候选框把新 DPI 推进 D2D 设备（SetDpiOverride/SetDpi）的做法。
     if (render_target_)
-    {
         render_target_->SetDpi(static_cast<float>(dpi_), static_cast<float>(dpi_));
-    }
 }
 
 void WaveOverlay::update_window_bounds()
@@ -511,7 +540,8 @@ void WaveOverlay::update_window_bounds()
         return;
     // 每次重新定位都按当前目标显示器刷新缩放，使 show()、状态切换、分辨率/DPI 变化
     // 走到的尺寸计算始终基于最新的显示器 DPI（与候选框每次显示都重算的行为一致）。
-    update_dpi_scale();
+    const VoiceOverlayAnchor anchor = resolve_anchor();
+    update_dpi_scale(anchor);
     bool has_transcript = false;
     if (show_transcript_.load())
     {
@@ -528,14 +558,27 @@ void WaveOverlay::update_window_bounds()
                     : (has_compact_status ? kProcessingHeight : (has_transcript ? kTranscriptHeight : kCompactHeight));
     const int width = static_cast<int>(std::lround(logical_width * scale_x_));
     const int height = static_cast<int>(std::lround(logical_height * scale_y_));
-    // 无论任务栏在哪条边，都让语音条位于“屏幕水平正中、偏底部”：
-    //  - 水平按整屏矩形（rcMonitor）居中，不受左/右任务栏挤压工作区的影响；
-    //  - 垂直贴工作区（rcWork）底部上方 10px，自动避开底部任务栏（任务栏在其它边时
-    //    rcWork.bottom 即整屏底部）。
-    const mvi_utils::MonitorMetrics metrics = mvi_utils::GetForegroundMonitorMetrics();
-    const int x = (metrics.full.right + metrics.full.left) / 2 - width / 2;
-    const int y = metrics.work.bottom - height - 10;
-    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+    RECT target = VoiceOverlayBottomAnchoredRect(anchor, width, height);
+    if (target.right <= target.left || target.bottom <= target.top)
+    {
+        // Standalone fixture fallback only: no explicit anchor and no capturable monitor. Keep the
+        // same work-area center / 24 DIP bottom rule using the existing monitor utility.
+        const mvi_utils::MonitorMetrics metrics = mvi_utils::GetForegroundMonitorMetrics();
+        const int work_width = static_cast<int>(metrics.work.right - metrics.work.left);
+        const int work_height = static_cast<int>(metrics.work.bottom - metrics.work.top);
+        if (work_width <= 0 || work_height <= 0)
+            return;
+        const int clamped_width = (std::max)(1, (std::min)(width, work_width));
+        const int clamped_height = (std::max)(1, (std::min)(height, work_height));
+        const int margin = VoiceOverlayDipToPx(static_cast<float>(kVoiceOverlayBottomMarginDip), dpi_);
+        const int x = metrics.work.left + (work_width - clamped_width) / 2;
+        int y = metrics.work.bottom - margin - clamped_height;
+        y = (std::max)(static_cast<int>(metrics.work.top),
+                       (std::min)(y, static_cast<int>(metrics.work.bottom) - clamped_height));
+        target = RECT{x, y, x + clamped_width, y + clamped_height};
+    }
+    SetWindowPos(hwnd_, HWND_TOPMOST, target.left, target.top, target.right - target.left, target.bottom - target.top,
+                 SWP_NOACTIVATE);
 }
 
 bool WaveOverlay::hit_test_action(float x, float y, Action &action) const
@@ -647,7 +690,7 @@ void WaveOverlay::draw()
     render_target_->SetTransform(D2D1::Matrix3x2F::Identity());
     render_target_->Clear(D2D1::ColorF(0, 0, 0, 0));
 
-    const float corner = (has_compact_status || has_actions) ? h * 0.5f : (has_transcript ? 16.0f : 10.0f);
+    const float corner = (has_compact_status || has_actions) ? h * 0.5f : (has_transcript ? 14.0f : 10.0f);
     const D2D1_ROUNDED_RECT panel = D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, w - 0.5f, h - 0.5f), corner, corner);
     render_target_->FillRoundedRectangle(panel, bg_brush_);
     render_target_->DrawRoundedRectangle(panel, border_brush_, 1.0f);
@@ -656,7 +699,7 @@ void WaveOverlay::draw()
     {
         const wchar_t *label = compact_status == CompactStatus::Recognizing ? L"识别中..." : L"处理中...";
         render_target_->DrawTextW(label, static_cast<UINT32>(wcslen(label)), processing_text_format_,
-                                  D2D1::RectF(content_left, 0.0f, content_right, h), bar_brush_);
+                                  D2D1::RectF(content_left, 0.0f, content_right, h), text_brush_);
     }
     else
     {
@@ -688,7 +731,7 @@ void WaveOverlay::draw()
         if (ensure_text_layout(transcript, text_width, text_height))
         {
             render_target_->DrawTextLayout(D2D1::Point2F(kTranscriptHorizontalPadding, kTranscriptTextTop),
-                                           text_layout_, bar_brush_, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                                           text_layout_, text_brush_, D2D1_DRAW_TEXT_OPTIONS_CLIP);
         }
     }
 
@@ -704,13 +747,13 @@ void WaveOverlay::draw()
 
         constexpr float x_half = 3.0f;
         render_target_->DrawLine(D2D1::Point2F(left_x - x_half, button_y - x_half),
-                                 D2D1::Point2F(left_x + x_half, button_y + x_half), bar_brush_, 1.7f);
+                                 D2D1::Point2F(left_x + x_half, button_y + x_half), text_brush_, 1.7f);
         render_target_->DrawLine(D2D1::Point2F(left_x + x_half, button_y - x_half),
-                                 D2D1::Point2F(left_x - x_half, button_y + x_half), bar_brush_, 1.7f);
+                                 D2D1::Point2F(left_x - x_half, button_y + x_half), text_brush_, 1.7f);
         render_target_->DrawLine(D2D1::Point2F(right_x - 3.8f, button_y),
-                                 D2D1::Point2F(right_x - 0.8f, button_y + 3.0f), bar_brush_, 1.7f);
+                                 D2D1::Point2F(right_x - 0.8f, button_y + 3.0f), text_brush_, 1.7f);
         render_target_->DrawLine(D2D1::Point2F(right_x - 0.8f, button_y + 3.0f),
-                                 D2D1::Point2F(right_x + 4.2f, button_y - 3.5f), bar_brush_, 1.7f);
+                                 D2D1::Point2F(right_x + 4.2f, button_y - 3.5f), text_brush_, 1.7f);
     }
 
     const HRESULT hr = render_target_->EndDraw();
