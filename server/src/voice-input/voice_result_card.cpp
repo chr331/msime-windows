@@ -19,6 +19,7 @@ constexpr UINT kModelChangedMessage = WM_APP + 190;
 constexpr UINT kAnchorChangedMessage = WM_APP + 191;
 constexpr UINT_PTR kAnimationTimerId = 1;
 constexpr UINT kAnimationTickMs = 16;
+constexpr UINT kCopyAutoCloseDelayMs = 1000;
 
 // Proportions in DIP. The card keeps a calm centered result: a quiet reassurance line, a
 // two-line preview, and one primary copy action. The full transcript stays in the model for
@@ -246,6 +247,7 @@ bool VoiceResultCard::init(HINSTANCE instance)
 void VoiceResultCard::shutdown()
 {
     stop_entrance_animation(false);
+    cancel_copy_auto_close();
     post_hwnd_.store(nullptr, std::memory_order_release);
     if (hwnd_)
     {
@@ -471,6 +473,11 @@ LRESULT VoiceResultCard::handle_message(HWND hwnd, UINT message, WPARAM wParam, 
             tick_entrance_animation();
             return 0;
         }
+        if (copy_close_timer_id_ != 0 && wParam == copy_close_timer_id_)
+        {
+            on_copy_auto_close_timer();
+            return 0;
+        }
         break;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
@@ -481,6 +488,7 @@ LRESULT VoiceResultCard::handle_message(HWND hwnd, UINT message, WPARAM wParam, 
     }
     case WM_DESTROY:
         KillTimer(hwnd, kAnimationTimerId);
+        cancel_copy_auto_close();
         animation_active_ = false;
         post_hwnd_.store(nullptr, std::memory_order_release);
         release_render_target();
@@ -701,6 +709,7 @@ void VoiceResultCard::apply_desired_model()
     const VoiceResultCardModel::Snapshot snap = model_.snapshot();
     if (!snap.visible || snap.text.empty())
     {
+        cancel_copy_auto_close();
         if (card_visible_)
             hide_card();
         else
@@ -711,8 +720,10 @@ void VoiceResultCard::apply_desired_model()
     const bool content_changed = displayed_session_ != snap.session || displayed_text_ != snap.text;
     if (content_changed)
     {
-        // A new result replaces the old one: cancel an in-flight entrance, drop any press/hover that
-        // started on the previous content, and re-read the theme on the next paint.
+        // A new result replaces the old one: cancel an in-flight entrance and any pending
+        // auto-close, drop any press/hover that started on the previous content, and re-read the
+        // theme on the next paint.
+        cancel_copy_auto_close();
         stop_entrance_animation(false);
         reset_press_state();
         reset_hover_state();
@@ -741,6 +752,8 @@ void VoiceResultCard::apply_desired_model()
 
 void VoiceResultCard::dismiss_shown_card()
 {
+    // A manual close cancels the copied-state dwell; only a fresh successful copy restarts it.
+    cancel_copy_auto_close();
     // close_if_current is decided inside the model lock, so a click that arrived from the previous
     // card can never dismiss a newer generation that reset() already switched to.
     if (!displayed_text_.empty() && model_.close_if_current(displayed_session_, displayed_text_))
@@ -753,11 +766,70 @@ void VoiceResultCard::on_copy_button()
     if (!model_.read_current(displayed_session_, displayed_text_, text))
         return;
 
-    feedback_ = CopyToClipboard(hwnd_, text) ? CopyFeedback::Copied : CopyFeedback::Failed;
+    if (CopyToClipboard(hwnd_, text))
+    {
+        feedback_ = CopyFeedback::Copied;
+        schedule_copy_auto_close(displayed_session_, text);
+    }
+    else
+    {
+        // The latest attempt failed: keep the card for retry and cancel any earlier auto-close.
+        cancel_copy_auto_close();
+        feedback_ = CopyFeedback::Failed;
+    }
     // Feedback changes the label; remeasure so the icon + label group stays centered in the
     // fixed-width pill. A failed copy stays clickable and the label becomes 重试复制.
     update_copy_button_rect();
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void VoiceResultCard::schedule_copy_auto_close(std::uint64_t session, const std::wstring &text)
+{
+    cancel_copy_auto_close();
+    if (!hwnd_)
+        return;
+
+    if (next_copy_close_timer_id_ == 0)
+        next_copy_close_timer_id_ = kCopyAutoCloseTimerIdBase;
+    const UINT_PTR timer_id = next_copy_close_timer_id_++;
+    if (next_copy_close_timer_id_ == 0)
+        next_copy_close_timer_id_ = kCopyAutoCloseTimerIdBase;
+
+    if (SetTimer(hwnd_, timer_id, kCopyAutoCloseDelayMs, nullptr) == 0)
+        return; // Keep the success card; the close button remains available.
+
+    copy_close_timer_id_ = timer_id;
+    copy_close_session_ = session;
+    copy_close_text_ = text;
+}
+
+void VoiceResultCard::cancel_copy_auto_close()
+{
+    if (hwnd_ && copy_close_timer_id_ != 0)
+        KillTimer(hwnd_, copy_close_timer_id_);
+    copy_close_timer_id_ = 0;
+    copy_close_session_ = 0;
+    copy_close_text_.clear();
+}
+
+void VoiceResultCard::on_copy_auto_close_timer()
+{
+    if (!hwnd_ || copy_close_timer_id_ == 0)
+        return;
+
+    const UINT_PTR timer_id = copy_close_timer_id_;
+    copy_close_timer_id_ = 0;
+    KillTimer(hwnd_, timer_id);
+
+    const std::uint64_t session = copy_close_session_;
+    const std::wstring text = copy_close_text_;
+    copy_close_session_ = 0;
+    copy_close_text_.clear();
+
+    // close_if_current checks the bound pair inside the model lock. A card replaced after the copy
+    // stays visible; a stale timer can never close a newer generation.
+    if (model_.close_if_current(session, text))
+        hide_card();
 }
 
 bool VoiceResultCard::hit_test(float x_dip, float y_dip, Region &region) const
@@ -787,7 +859,7 @@ const wchar_t *VoiceResultCard::copy_label() const
     switch (feedback_)
     {
     case CopyFeedback::Copied:
-        return L"已复制全文";
+        return L"已复制";
     case CopyFeedback::Failed:
         return L"重试复制";
     case CopyFeedback::None:
@@ -934,6 +1006,7 @@ void VoiceResultCard::hide_card()
     reset_press_state();
     reset_hover_state();
     stop_entrance_animation(false);
+    cancel_copy_auto_close();
     card_visible_ = false;
     feedback_ = CopyFeedback::None;
     scroll_offset_ = 0.0f;

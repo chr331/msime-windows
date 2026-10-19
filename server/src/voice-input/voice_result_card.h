@@ -61,6 +61,9 @@ class VoiceResultCard
         Copied,
         Failed
     };
+
+    // 1 is the entrance-animation timer; each pending auto-close takes a fresh ID above it.
+    static constexpr UINT_PTR kCopyAutoCloseTimerIdBase = 2;
     struct ButtonRect
     {
         float left = 0.0f;
@@ -91,6 +94,9 @@ class VoiceResultCard
     void apply_desired_model();
     void dismiss_shown_card();
     void on_copy_button();
+    void schedule_copy_auto_close(std::uint64_t session, const std::wstring &text);
+    void cancel_copy_auto_close();
+    void on_copy_auto_close_timer();
     void reset_press_state();
     void reset_hover_state();
     bool hit_test(float x_dip, float y_dip, Region &region) const;
@@ -145,6 +151,14 @@ class VoiceResultCard
     std::wstring displayed_text_;
     bool card_visible_ = false;
     CopyFeedback feedback_ = CopyFeedback::None;
+    // Pending auto-close after a successful copy. The session/text pair identifies the exact card
+    // whose text was copied; close_if_current revalidates it under the model lock on the UI thread.
+    // A fresh timer ID per schedule makes WM_TIMER messages already queued for a killed timer
+    // harmless, so a repeated copy cannot be cut short by the previous dwell.
+    std::uint64_t copy_close_session_ = 0;
+    std::wstring copy_close_text_;
+    UINT_PTR copy_close_timer_id_ = 0;
+    UINT_PTR next_copy_close_timer_id_ = kCopyAutoCloseTimerIdBase;
     ButtonRect close_button_rect_;
     ButtonRect copy_button_rect_;
     float title_label_width_dip_ = 60.0f;
